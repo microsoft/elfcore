@@ -1,0 +1,18 @@
+[package]
+name = "elfcore"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "elfcore"
+path = "src/lib/lib.rs"
+
+[dependencies]
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+nix = "0.23"
+smallvec = "1.8"
+thiserror = "1.0"
+tracing = "0.1"
+zerocopy = "0.6"
