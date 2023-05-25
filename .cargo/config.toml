@@ -38,6 +38,7 @@ rustflags = [
   "-Wclippy::string_to_string",
   "-Wclippy::suboptimal_flops",
   "-Wclippy::missing_safety_doc",
+  "-Wclippy::undocumented_unsafe_blocks",
 
   # Possible future additions:
   #
