@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Errors that might be seen when creating a core dump file.
 
 use thiserror::Error;

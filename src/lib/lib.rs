@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! A Rust library for creating ELF core dump files.
 
 #![cfg(target_os = "linux")]

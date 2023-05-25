@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Process trace helpers, not machine-specific ones.
 
 use std::ffi::c_void;

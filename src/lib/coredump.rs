@@ -1,5 +1,8 @@
-//! Code for collecting system information, thread status information, and saving core dump files.
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
 
+//! Code for collecting system information, thread status information, and saving core dump files.
+//!
 //! Panics must be avoided as that may leave the target process in a bad state
 //! The code below must not do backward seeks so that the content can be streamed.
 
