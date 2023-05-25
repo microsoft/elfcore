@@ -37,6 +37,7 @@ rustflags = [
   "-Wclippy::rest_pat_in_fully_bound_structs",
   "-Wclippy::string_to_string",
   "-Wclippy::suboptimal_flops",
+  "-Wclippy::missing_safety_doc",
 
   # Possible future additions:
   #
