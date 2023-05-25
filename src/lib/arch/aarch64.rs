@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Aarch64 specifics for ELF core dump files.
 
 #![cfg(target_arch = "aarch64")]

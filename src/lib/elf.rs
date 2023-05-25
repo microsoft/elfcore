@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! ELF constants. There is the `object` crate that is pretty large.
 //! Need a tiny portion of ELF specification as the code might run in a very
 //! constrained environment.

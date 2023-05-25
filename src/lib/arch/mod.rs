@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! A Rust helper library with machine-specific code for ELF core dump files.
 
 use crate::elf::NT_PRFPREG;
