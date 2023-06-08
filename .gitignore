@@ -12,3 +12,5 @@ Cargo.lock
 
 # Ignore vscode directories
 .vscode/
+
+*.core

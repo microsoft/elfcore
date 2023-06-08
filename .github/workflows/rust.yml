@@ -27,6 +27,8 @@ jobs:
       run: cargo build --verbose ${{ matrix.features }}
     - name: Run tests
       run: cargo test --verbose ${{ matrix.features }}
+    - name: Run basic dump creation test
+      run: ./ci/test.sh
 
   miri:
     name: "Miri"
