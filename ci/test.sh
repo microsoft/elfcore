@@ -2,8 +2,6 @@
 
 # Test if we can successfully create a core dump of a process.
 
-set -x
-
 yes > /dev/null 2>&1 &
 yes_pid=$!
 
@@ -19,6 +17,7 @@ dump_result="$?"
 kill $yes_pid
 
 if [[ $dump_result != 0 ]]; then
+    echo "generating dump failed"
     exit $dump_result
 fi
 
