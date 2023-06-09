@@ -18,4 +18,12 @@ fi
 dump_result="$?"
 kill $yes_pid
 
-exit $dump_result
+if [[ $dump_result != 0 ]]; then
+    exit $dump_result
+fi
+
+# Make sure the dump can be opened in gdb, even if there are no symbols.
+gdb "$(which yes)" dump.core -q -ex "bt" -ex "q"
+gdb_result="$?"
+
+exit $gdb_result
