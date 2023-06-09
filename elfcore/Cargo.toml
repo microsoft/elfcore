@@ -2,6 +2,12 @@
 name = "elfcore"
 version = "0.1.0"
 edition = "2021"
+description = "elfcore is a crate to create ELF core dumps for processes on Linux."
+license = "MIT"
+authors = ["Microsoft"]
+repository = "https://github.com/microsoft/elfcore"
+keywords = ["elf", "coredump", "debugging"]
+categories = ["development-tools::debugging", "os::linux-apis"]
 
 [dependencies]
 
