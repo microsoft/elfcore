@@ -1,12 +1,15 @@
 # elfcore
 
 The repository contains the `elfcore` crate, which provides a way to create
-memory dumps of running processes on Linux without external dependencies. Dumps are generated using the ELF
-core dump format. Documentation can be found in the corresponding rustdoc for
-the crate.
+memory dumps of running processes on Linux without external dependencies. Dumps
+are generated using the ELF core dump format. Documentation can be found in the
+corresponding rustdoc for the crate.
 
 Included is a small sample program `elfcore-example` that creates an ELF core
-dump of a specified process.
+dump of a specified process. Run it with something like:
+```bash
+cargo run elfcore-example -- <pid> dump.core
+```
 
 ## Contributing
 
