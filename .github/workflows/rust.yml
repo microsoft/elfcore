@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
+    - name: Install deps
+      run: ./ci/install_deps.sh
     - name: Format
       run: cargo fmt --all -- --check
     - name: Check
