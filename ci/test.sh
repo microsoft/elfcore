@@ -7,7 +7,14 @@ set -x
 yes > /dev/null 2>&1 &
 yes_pid=$!
 
-cargo run -- -v $yes_pid dump.core
+if [[ $GITHUB_ACTIONS == "true" ]]; then
+    # Run the binary directly as sudo is required in CI.
+    cargo build -p elfcore-sample
+    sudo ./target/elfcore-sample -v $yes_pid dump.core
+else
+    cargo run -- -v $yes_pid dump.core
+fi
+
 dump_result="$?"
 kill $yes_pid
 
