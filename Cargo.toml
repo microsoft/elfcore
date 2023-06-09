@@ -1,18 +1,16 @@
-[package]
-name = "elfcore"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+resolver = "2"
+members = [
+    "elfcore",
+    "elfcore-sample",
+]
 
-[lib]
-name = "elfcore"
-path = "src/lib/lib.rs"
-
-[dependencies]
-
-[target.'cfg(unix)'.dependencies]
+[workspace.dependencies]
+anyhow = "1.0"
 libc = "0.2"
 nix = "0.23"
 smallvec = "1.8"
 thiserror = "1.0"
 tracing = "0.1"
+tracing-subscriber = "0.3.17"
 zerocopy = "0.6"

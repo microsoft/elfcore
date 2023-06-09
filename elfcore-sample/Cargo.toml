@@ -1,0 +1,11 @@
+[package]
+name = "elfcore-sample"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+elfcore = { path = "../elfcore" }
+
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
