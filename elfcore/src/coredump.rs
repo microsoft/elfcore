@@ -11,11 +11,13 @@ use super::arch::Arch;
 use crate::elf::*;
 use crate::ptrace::ptrace_interrupt;
 use crate::CoreError;
-use nix::libc::Elf64_Ehdr;
 use nix::libc::Elf64_Phdr;
 use nix::sys;
 use nix::sys::ptrace::seize;
 use nix::sys::ptrace::Options;
+use nix::sys::uio::process_vm_readv;
+use nix::sys::uio::IoVec;
+use nix::sys::uio::RemoteIoVec;
 use nix::sys::wait::waitpid;
 use nix::unistd::sysconf;
 use nix::unistd::Pid;
@@ -23,16 +25,14 @@ use nix::unistd::SysconfVar;
 use smallvec::smallvec;
 use smallvec::SmallVec;
 use std::collections::HashSet;
-use std::ffi::c_void;
 use std::fs;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::Read;
 use std::io::Write;
-use std::os::unix::fs::FileExt;
-use std::os::unix::io::AsRawFd;
 use std::slice;
 use zerocopy::AsBytes;
+use zerocopy::FromBytes;
 
 const ELF_HEADER_ALIGN: usize = 8;
 const NOTE_HEADER_PADDING: usize = 8;
@@ -361,7 +361,6 @@ struct NoteSizes {
 /// View of a Linux light-weight process
 pub struct ProcessView {
     pid: Pid,
-    mem: File,
     threads: Vec<ThreadView>,
     va_regions: Vec<VaRegion>,
     mapped_files: Vec<MappedFile>,
@@ -427,10 +426,7 @@ fn get_aux_vector(pid: Pid) -> Result<Vec<Elf64_Auxv>, CoreError> {
     Ok(auxv)
 }
 
-fn get_va_regions(
-    pid: Pid,
-    mem: &mut File,
-) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), CoreError> {
+fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), CoreError> {
     let mut maps: Vec<VaRegion> = Vec::new();
     let mut vdso = 0_u64;
 
@@ -521,16 +517,16 @@ fn get_va_regions(
                 // as it might be quite huge and may contains secrets, filter out by default.
                 // TODO: make optional.
 
-                // SAFETY: reading other process memory. The process is paused, the address
-                // comes from the kernel. The structure is repr(C) with no padding bytes,
-                // so all byte patterns are valid.
-                let maybe_elf_hdr = unsafe {
-                    let mut elf_hdr: Elf64_Ehdr = std::mem::zeroed();
-                    let elf_hdr_slice = slice::from_raw_parts_mut(
-                        &mut elf_hdr as *mut _ as *mut u8,
-                        std::mem::size_of::<Elf64_Ehdr>(),
-                    );
-                    match mem.read_exact_at(elf_hdr_slice, begin) {
+                let maybe_elf_hdr: Option<Elf64_Ehdr> = {
+                    let mut elf_hdr = Elf64_Ehdr::new_zeroed();
+                    match process_vm_readv(
+                        pid,
+                        &[IoVec::from_mut_slice(elf_hdr.as_bytes_mut())],
+                        &[RemoteIoVec {
+                            base: begin as usize,
+                            len: std::mem::size_of::<Elf64_Ehdr>(),
+                        }],
+                    ) {
                         Ok(_) => Some(elf_hdr),
                         Err(_) => None,
                     }
@@ -696,11 +692,6 @@ impl ProcessView {
     pub fn new(pid: libc::pid_t) -> Result<Self, CoreError> {
         let pid = nix::unistd::Pid::from_raw(pid);
 
-        // Trying to open the memory file first
-        let mem_path = format!("/proc/{}/mem", pid);
-        tracing::debug!("Reading {mem_path}");
-        let mut mem = File::open(mem_path)?;
-
         let mut tids = get_thread_ids(pid)?;
         tids.sort();
 
@@ -760,7 +751,7 @@ impl ProcessView {
             tracing::debug!("Thread state: {:x?}", thread);
         }
 
-        let (va_regions, mapped_files, vdso) = get_va_regions(pid, &mut mem)?;
+        let (va_regions, mapped_files, vdso) = get_va_regions(pid)?;
 
         tracing::debug!("VA regions {:x?}", va_regions);
         tracing::debug!("Mapped files {:x?}", mapped_files);
@@ -770,20 +761,21 @@ impl ProcessView {
 
         tracing::debug!("Auxiliary vector {:x?}", aux_vector);
 
+        let page_size = match sysconf(SysconfVar::PAGE_SIZE) {
+            Ok(s) => match s {
+                Some(s) => s as usize,
+                None => 0x1000_usize,
+            },
+            Err(_) => 0x1000_usize,
+        };
+
         Ok(Self {
             pid,
-            mem,
             threads,
             va_regions,
             mapped_files,
             aux_vector,
-            page_size: match sysconf(SysconfVar::PAGE_SIZE) {
-                Ok(s) => match s {
-                    Some(s) => s as usize,
-                    None => 0x1000_usize,
-                },
-                Err(_) => 0x1000_usize,
-            },
+            page_size,
         })
     }
 }
@@ -1328,28 +1320,58 @@ fn write_va_region<T: Write>(
     va_region: &VaRegion,
     pv: &ProcessView,
 ) -> Result<usize, CoreError> {
+    // For optimal performance should be in [8KiB; 64KiB] range.
+    // Selected 64 KiB as data on various hardware platforms shows
+    // peak performance in this case.
+    const BUFFER_SIZE: usize = 0x10000;
+
     let mut dumped = 0_usize;
     let mut address = va_region.begin;
+    let mut buffer = [0_u8; BUFFER_SIZE];
 
     while address < va_region.end {
-        let mut page = vec![0xF1_u8; pv.page_size];
+        let len = std::cmp::min((va_region.end - address) as usize, BUFFER_SIZE);
+        match process_vm_readv(
+            pv.pid,
+            &[IoVec::from_mut_slice(&mut buffer)],
+            &[RemoteIoVec {
+                base: address as usize,
+                len,
+            }],
+        ) {
+            Ok(bytes_read) => {
+                writer.write_all(&buffer[..bytes_read])?;
 
-        // SAFETY: Reading other process memory. The process is paused,
-        // the address comes from the kernel. The structure is repr(C) with no padding bytes,
-        // so all byte patterns are valid.
-        let _bytes_read = unsafe {
-            nix::libc::pread64(
-                pv.mem.as_raw_fd(),
-                page.as_mut_ptr() as *const _ as *mut c_void,
-                page.len(),
-                address as i64,
-            )
-        };
+                address += bytes_read as u64;
+                dumped += bytes_read;
+            }
+            Err(_) => {
+                // Every precaution has been taken to read the accessible
+                // memory only and still something has gone wrong. Nevertheless,
+                // have to make forward progress to dump exactly as much memory
+                // as the caller expects.
+                //
+                // Save dummy data up to the next page boundary.
 
-        writer.write_all(page.as_bytes())?;
+                // Page size is a power of two on modern platforms.
+                debug_assert!(
+                    pv.page_size.is_power_of_two(),
+                    "Page size is expected to be a power of two"
+                );
 
-        address += pv.page_size as u64;
-        dumped += page.as_bytes().len();
+                // Round up with bit twiddling as the page size is a power of two.
+                let next_address = (pv.page_size + address as usize) & !(pv.page_size - 1);
+                let next_address = std::cmp::min(next_address, va_region.end as usize);
+                let dummy_data_size = next_address - address as usize;
+
+                let dummy_data: SmallVec<[u8; BUFFER_SIZE]> = smallvec![0xf1_u8; dummy_data_size];
+
+                writer.write_all(&dummy_data[..dummy_data_size])?;
+
+                address = next_address as u64;
+                dumped += dummy_data_size;
+            }
+        }
     }
 
     Ok(dumped)
