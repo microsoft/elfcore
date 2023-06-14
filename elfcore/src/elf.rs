@@ -63,7 +63,7 @@ pub const NT_FILE: u32 = 0x46494c45;
 
 /// Program status
 #[derive(AsBytes)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct prpsinfo_t {
     // total size (bytes):  136
     pub pr_state: u8,
@@ -84,7 +84,7 @@ pub struct prpsinfo_t {
 
 /// Signal information
 #[derive(AsBytes)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct siginfo_t {
     // total size (bytes):  128
     pub si_signo: u32,
@@ -95,16 +95,16 @@ pub struct siginfo_t {
 }
 
 /// Kernel time value
-#[repr(C, packed)]
 #[derive(AsBytes)]
+#[repr(C)]
 pub struct pr_timeval_t {
     pub tv_sec: u64,
     pub tv_usec: u64,
 }
 
 /// Program status
-#[repr(C, packed)]
 #[derive(AsBytes)]
+#[repr(C)]
 pub struct prstatus_t {
     // total size (bytes):  336 (x86_64)
     pub si_signo: u32,
@@ -128,9 +128,8 @@ pub struct prstatus_t {
 }
 
 /// ELF auxiliary vector note
-#[derive(AsBytes, FromBytes)]
-#[repr(C, packed)]
-#[derive(Clone, Copy, Debug)]
+#[derive(AsBytes, FromBytes, Clone, Copy, Debug)]
+#[repr(C)]
 pub struct Elf64_Auxv {
     pub a_type: u64, // from auxvec.h
     pub a_val: u64,
@@ -138,9 +137,29 @@ pub struct Elf64_Auxv {
 
 /// ELF note header
 #[derive(AsBytes)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct Elf64_Nhdr {
     pub namesz: u32,
     pub descsz: u32,
     pub ntype: u32,
+}
+
+/// ELF header
+#[derive(AsBytes, FromBytes)]
+#[repr(C)]
+pub struct Elf64_Ehdr {
+    pub e_ident: [u8; 16],
+    pub e_type: u16,
+    pub e_machine: u16,
+    pub e_version: u32,
+    pub e_entry: u64,
+    pub e_phoff: u64,
+    pub e_shoff: u64,
+    pub e_flags: u32,
+    pub e_ehsize: u16,
+    pub e_phentsize: u16,
+    pub e_phnum: u16,
+    pub e_shentsize: u16,
+    pub e_shnum: u16,
+    pub e_shstrndx: u16,
 }

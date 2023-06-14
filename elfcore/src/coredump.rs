@@ -11,7 +11,6 @@ use super::arch::Arch;
 use crate::elf::*;
 use crate::ptrace::ptrace_interrupt;
 use crate::CoreError;
-use nix::libc::Elf64_Ehdr;
 use nix::libc::Elf64_Phdr;
 use nix::sys;
 use nix::sys::ptrace::seize;
@@ -33,6 +32,7 @@ use std::io::Read;
 use std::io::Write;
 use std::slice;
 use zerocopy::AsBytes;
+use zerocopy::FromBytes;
 
 const ELF_HEADER_ALIGN: usize = 8;
 const NOTE_HEADER_PADDING: usize = 8;
@@ -517,24 +517,11 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
                 // as it might be quite huge and may contains secrets, filter out by default.
                 // TODO: make optional.
 
-                let maybe_elf_hdr = {
-                    // SAFETY: while the all-zero byte content does not represent
-                    // a semantically valid value, the code below checks for the
-                    // correctness.
-                    let mut elf_hdr: Elf64_Ehdr = unsafe { std::mem::zeroed() };
-
-                    // SAFETY: creating a mutable byte slice from the `elf_hdr` space, using
-                    // the correct address and the correct size.
-                    let elf_hdr_slice = unsafe {
-                        slice::from_raw_parts_mut(
-                            &mut elf_hdr as *mut _ as *mut u8,
-                            std::mem::size_of::<Elf64_Ehdr>(),
-                        )
-                    };
-
+                let maybe_elf_hdr: Option<Elf64_Ehdr> = {
+                    let mut elf_hdr = Elf64_Ehdr::new_zeroed();
                     match process_vm_readv(
                         pid,
-                        &[IoVec::from_mut_slice(elf_hdr_slice)],
+                        &[IoVec::from_mut_slice(elf_hdr.as_bytes_mut())],
                         &[RemoteIoVec {
                             base: begin as usize,
                             len: std::mem::size_of::<Elf64_Ehdr>(),
