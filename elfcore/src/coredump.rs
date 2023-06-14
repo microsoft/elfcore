@@ -768,10 +768,6 @@ impl ProcessView {
             },
             Err(_) => 0x1000_usize,
         };
-        assert!(
-            page_size.is_power_of_two(),
-            "Page size is expected to be a power of 2"
-        );
 
         Ok(Self {
             pid,
@@ -1357,8 +1353,13 @@ fn write_va_region<T: Write>(
                 //
                 // Save dummy data up to the next page boundary.
 
-                // Page size is a power of 2 on modern platforms, that is asserted in
-                // the `ProcessView`'s constructor. Round up with bit twiddling.
+                // Page size is a power of two on modern platforms.
+                debug_assert!(
+                    pv.page_size.is_power_of_two(),
+                    "Page size is expected to be a power of two"
+                );
+
+                // Round up with bit twiddling as the page size is a power of two.
                 let next_address = (pv.page_size + address as usize) & !(pv.page_size - 1);
                 let next_address = std::cmp::min(next_address, va_region.end as usize);
                 let dummy_data_size = next_address - address as usize;
