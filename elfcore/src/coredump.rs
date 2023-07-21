@@ -583,7 +583,7 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
                         regions: vec![MappedFileRegion { begin, end, offset }],
                     })
                 } else {
-                    let mut last_region = last_file
+                    let last_region = last_file
                         .regions
                         .last_mut()
                         .ok_or(CoreError::ProcParsingError)?;
