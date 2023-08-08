@@ -16,7 +16,6 @@ use nix::sys;
 use nix::sys::ptrace::seize;
 use nix::sys::ptrace::Options;
 use nix::sys::uio::process_vm_readv;
-use nix::sys::uio::IoVec;
 use nix::sys::uio::RemoteIoVec;
 use nix::sys::wait::waitpid;
 use nix::unistd::sysconf;
@@ -28,6 +27,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::BufRead;
+use std::io::IoSliceMut;
 use std::io::Read;
 use std::io::Write;
 use std::slice;
@@ -521,7 +521,7 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
                     let mut elf_hdr = Elf64_Ehdr::new_zeroed();
                     match process_vm_readv(
                         pid,
-                        &[IoVec::from_mut_slice(elf_hdr.as_bytes_mut())],
+                        &mut [IoSliceMut::new(elf_hdr.as_bytes_mut())],
                         &[RemoteIoVec {
                             base: begin as usize,
                             len: std::mem::size_of::<Elf64_Ehdr>(),
@@ -1333,7 +1333,7 @@ fn write_va_region<T: Write>(
         let len = std::cmp::min((va_region.end - address) as usize, BUFFER_SIZE);
         match process_vm_readv(
             pv.pid,
-            &[IoVec::from_mut_slice(&mut buffer)],
+            &mut [IoSliceMut::new(&mut buffer)],
             &[RemoteIoVec {
                 base: address as usize,
                 len,
