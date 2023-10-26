@@ -8,6 +8,7 @@
 use super::arch;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 pub const EI_MAG0: usize = 0;
 pub const EI_MAG1: usize = 1;
@@ -128,7 +129,7 @@ pub struct prstatus_t {
 }
 
 /// ELF auxiliary vector note
-#[derive(AsBytes, FromBytes, Clone, Copy, Debug)]
+#[derive(AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Elf64_Auxv {
     pub a_type: u64, // from auxvec.h
@@ -145,7 +146,7 @@ pub struct Elf64_Nhdr {
 }
 
 /// ELF header
-#[derive(AsBytes, FromBytes)]
+#[derive(AsBytes, FromBytes, FromZeroes)]
 #[repr(C)]
 pub struct Elf64_Ehdr {
     pub e_ident: [u8; 16],

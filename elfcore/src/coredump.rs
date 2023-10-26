@@ -33,7 +33,7 @@ use std::io::Seek;
 use std::io::Write;
 use std::slice;
 use zerocopy::AsBytes;
-use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 const ELF_HEADER_ALIGN: usize = 8;
 const NOTE_HEADER_PADDING: usize = 8;
