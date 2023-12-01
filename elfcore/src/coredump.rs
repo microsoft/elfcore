@@ -783,17 +783,11 @@ impl ProcessView {
     }
 
     /// Add arbitrary additional data to the core dump as memory
-    pub fn add_data(&mut self, data: Vec<u8>) -> u64 {
-        let mut last = 0;
-        for region in &self.va_regions {
-            if region.end > last {
-                last = region.end;
-            }
-        }
-
+    pub fn add_data(&mut self, data: Vec<u8>, va: u64) {
+        let len = data.len() as u64;
         self.va_regions.push(VaRegion {
-            begin: last,
-            end: last + data.len() as u64,
+            begin: va,
+            end: va + len,
             protection: VaProtection {
                 is_private: false,
                 read: true,
@@ -804,7 +798,7 @@ impl ProcessView {
             mapped_file_name: None,
             data: Some(data),
         });
-        last
+        tracing::debug!("{:#x} bytes of data will be added at VA {:#x}", len, va);
     }
 }
 
@@ -994,7 +988,6 @@ fn write_elf_header<T: Write>(
         e_ehsize: std::mem::size_of::<Elf64_Ehdr>() as u16,
         e_phentsize: std::mem::size_of::<Elf64_Phdr>() as u16,
         e_phnum: 1 + pv.va_regions.len() as u16, // PT_NOTE and VA regions
-        // e_phnum: 2 + pv.va_regions.len() as u16, // PT_NOTE and VA regions
         e_shentsize: 0,
         e_entry: 0,
         e_shoff: 0,
@@ -1040,7 +1033,6 @@ fn write_program_headers<T: Write>(
     // Notes are situated right after the headers.
 
     let phdr_size = std::mem::size_of::<Elf64_Phdr>() * (pv.va_regions.len() + 1);
-    // let phdr_size = std::mem::size_of::<Elf64_Phdr>() * (pv.va_regions.len() + 2);
     let ehdr_size = std::mem::size_of::<Elf64_Ehdr>();
     let data_offset = round_up(ehdr_size as u64, ELF_HEADER_ALIGN as u64)
         + round_up(phdr_size as u64, ELF_HEADER_ALIGN as u64);
@@ -1116,28 +1108,6 @@ fn write_program_headers<T: Write>(
 
         current_offset += seg_header.p_filesz;
     }
-
-    // let mut seg_header = Elf64_Phdr {
-    //     p_type: PT_LOAD,
-    //     p_flags: 1u32 << 2,
-    //     p_offset: current_offset,
-    //     p_vaddr: 0,
-    //     p_paddr: 0,
-    //     p_filesz: 19000,
-    //     p_memsz: 19000,
-    //     p_align: pv.page_size as u64,
-    // };
-
-    // // SAFETY: Elf64_Phdr is repr(C) with no padding bytes,
-    // // so all byte patterns are valid.
-    // let slice = unsafe {
-    //     slice::from_raw_parts_mut(
-    //         &mut seg_header as *mut _ as *mut u8,
-    //         std::mem::size_of::<Elf64_Phdr>(),
-    //     )
-    // };
-    // writer.write_all(slice)?;
-    // written += slice.len();
 
     tracing::info!("Wrote {} bytes", written);
 
@@ -1556,37 +1526,59 @@ fn write_va_regions<T: Write>(
     Ok(written)
 }
 
-pub fn add_region_to_header(buf: &[u8], size: u64) -> Option<(Vec<u8>, usize)> {
+/// Reads the elf and program headers and returns a modified copy that includes
+/// an additional program header using the parameters specified. Returns the
+/// modified header as bytes and the offset in the original buffer where the
+/// initial header ended. An error is returned if the buffer does not contain a
+/// complete header or the header contains fields that are unsupported.
+///
+/// The caller is expected to find an appropriate place in virtual address space
+/// to place the data and to append the data to the end of the core dump file.
+pub fn add_region_to_header(buf: &[u8], len: u64, va: u64) -> Result<(Vec<u8>, usize), CoreError> {
+    if size_of::<Elf64_Ehdr>() > buf.len() {
+        return Err(CoreError::IncompleteHeader);
+    }
+
+    // copy the elf header
     let mut header = buf[0..size_of::<Elf64_Ehdr>()].to_vec();
     let ehdr = <Elf64_Ehdr as zerocopy::FromBytes>::mut_from(&mut header).unwrap();
     tracing::trace!("initial ehdr: {:#?}", ehdr);
 
+    // determine the location of the program headers
     let phdr_start = ehdr.e_phoff as usize;
     let phdr_end = phdr_start + ehdr.e_phentsize as usize * ehdr.e_phnum as usize;
     if phdr_end > buf.len() {
-        return None;
+        return Err(CoreError::IncompleteHeader);
     }
 
+    // file must not contain sections headers, as that is not handled here
+    if ehdr.e_shoff != 0 {
+        return Err(CoreError::UnsupportedHeader);
+    }
+
+    // copy the program headers
     let mut phdrs = <Elf64_Phdr as zerocopy::FromBytes>::slice_from(&buf[phdr_start..phdr_end])
         .unwrap()
         .to_vec();
     tracing::trace!("initial phdrs: {:#?}", phdrs);
 
+    // modify the existing headers to account for the new program header
     ehdr.e_phnum += 1;
     for phdr in &mut phdrs {
         phdr.p_offset += size_of::<Elf64_Phdr>() as u64;
     }
 
+    // add the new program header
     let last = phdrs.last().unwrap();
     let offset = last.p_offset + last.p_filesz;
     phdrs.push(Elf64_Phdr {
         p_type: PT_LOAD,
         p_flags: 1u32 << 2,
         p_offset: offset,
-        p_vaddr: 0xF8000000,
-        p_paddr: 0xF8000000,
-        p_filesz: size,
-        p_memsz: size,
+        p_vaddr: va,
+        p_paddr: va,
+        p_filesz: len,
+        p_memsz: len,
         p_align: last.p_align,
     });
 
@@ -1594,5 +1586,5 @@ pub fn add_region_to_header(buf: &[u8], size: u64) -> Option<(Vec<u8>, usize)> {
     tracing::trace!("modified phdrs: {:#?}", phdrs);
 
     header.extend_from_slice(phdrs.as_bytes());
-    Some((header, phdr_end))
+    Ok((header, phdr_end))
 }

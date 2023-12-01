@@ -29,4 +29,10 @@ pub enum CoreError {
     /// I/O error
     #[error("I/O error")]
     IoError(#[from] std::io::Error),
+    /// Data provided does not contain a complete header
+    #[error("data provided does not contain a complete header")]
+    IncompleteHeader,
+    /// Header provided contains unsupported fields
+    #[error("Header provided contains unsupported fields")]
+    UnsupportedHeader,
 }
