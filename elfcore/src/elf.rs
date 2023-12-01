@@ -146,7 +146,7 @@ pub struct Elf64_Nhdr {
 }
 
 /// ELF header
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(AsBytes, FromBytes, FromZeroes, Debug)]
 #[repr(C)]
 pub struct Elf64_Ehdr {
     pub e_ident: [u8; 16],
@@ -163,4 +163,18 @@ pub struct Elf64_Ehdr {
     pub e_shentsize: u16,
     pub e_shnum: u16,
     pub e_shstrndx: u16,
+}
+
+/// Program header
+#[derive(AsBytes, FromBytes, FromZeroes, Copy, Clone, Debug)]
+#[repr(C)]
+pub struct Elf64_Phdr {
+    pub p_type: u32,
+    pub p_flags: u32,
+    pub p_offset: u64,
+    pub p_vaddr: u64,
+    pub p_paddr: u64,
+    pub p_filesz: u64,
+    pub p_memsz: u64,
+    pub p_align: u64,
 }

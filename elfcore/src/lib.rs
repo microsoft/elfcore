@@ -12,6 +12,7 @@ mod elf;
 mod error;
 mod ptrace;
 
+pub use coredump::add_region_to_header;
 pub use coredump::write_core_dump;
 pub use coredump::ProcessView;
 pub use error::CoreError;
