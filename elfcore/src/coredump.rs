@@ -11,6 +11,7 @@ use super::arch::Arch;
 use crate::elf::*;
 use crate::ptrace::ptrace_interrupt;
 use crate::CoreError;
+use nix::libc::Elf64_Phdr;
 use nix::sys;
 use nix::sys::ptrace::seize;
 use nix::sys::ptrace::Options;
@@ -30,7 +31,6 @@ use std::io::IoSliceMut;
 use std::io::Read;
 use std::io::Seek;
 use std::io::Write;
-use std::mem::size_of;
 use std::slice;
 use zerocopy::AsBytes;
 use zerocopy::FromZeroes;
@@ -1524,67 +1524,4 @@ fn write_va_regions<T: Write>(
     tracing::info!("Wrote {} bytes for VA regions", written);
 
     Ok(written)
-}
-
-/// Reads the elf and program headers and returns a modified copy that includes
-/// an additional program header using the parameters specified. Returns the
-/// modified header as bytes and the offset in the original buffer where the
-/// initial header ended. An error is returned if the buffer does not contain a
-/// complete header or the header contains fields that are unsupported.
-///
-/// The caller is expected to find an appropriate place in virtual address space
-/// to place the data and to append the data to the end of the core dump file.
-pub fn add_region_to_header(buf: &[u8], len: u64, va: u64) -> Result<(Vec<u8>, usize), CoreError> {
-    if size_of::<Elf64_Ehdr>() > buf.len() {
-        return Err(CoreError::IncompleteHeader);
-    }
-
-    // copy the elf header
-    let mut header = buf[0..size_of::<Elf64_Ehdr>()].to_vec();
-    let ehdr = <Elf64_Ehdr as zerocopy::FromBytes>::mut_from(&mut header).unwrap();
-    tracing::trace!("initial ehdr: {:#?}", ehdr);
-
-    // determine the location of the program headers
-    let phdr_start = ehdr.e_phoff as usize;
-    let phdr_end = phdr_start + ehdr.e_phentsize as usize * ehdr.e_phnum as usize;
-    if phdr_end > buf.len() {
-        return Err(CoreError::IncompleteHeader);
-    }
-
-    // file must not contain sections headers, as that is not handled here
-    if ehdr.e_shoff != 0 {
-        return Err(CoreError::UnsupportedHeader);
-    }
-
-    // copy the program headers
-    let mut phdrs = <Elf64_Phdr as zerocopy::FromBytes>::slice_from(&buf[phdr_start..phdr_end])
-        .unwrap()
-        .to_vec();
-    tracing::trace!("initial phdrs: {:#?}", phdrs);
-
-    // modify the existing headers to account for the new program header
-    ehdr.e_phnum += 1;
-    for phdr in &mut phdrs {
-        phdr.p_offset += size_of::<Elf64_Phdr>() as u64;
-    }
-
-    // add the new program header
-    let last = phdrs.last().unwrap();
-    let offset = last.p_offset + last.p_filesz;
-    phdrs.push(Elf64_Phdr {
-        p_type: PT_LOAD,
-        p_flags: 1u32 << 2,
-        p_offset: offset,
-        p_vaddr: va,
-        p_paddr: va,
-        p_filesz: len,
-        p_memsz: len,
-        p_align: last.p_align,
-    });
-
-    tracing::trace!("modified ehdr: {:#?}", ehdr);
-    tracing::trace!("modified phdrs: {:#?}", phdrs);
-
-    header.extend_from_slice(phdrs.as_bytes());
-    Ok((header, phdr_end))
 }
