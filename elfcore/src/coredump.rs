@@ -5,7 +5,7 @@
 //!
 //! Panics must be avoided as that may leave the target process in a bad state
 //! The code below must not do backward seeks so that the content can be streamed.
-#![allow(unsafe_code)]
+
 use super::arch;
 use super::arch::Arch;
 use crate::elf::*;
