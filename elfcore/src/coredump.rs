@@ -334,6 +334,7 @@ struct VaRegion {
     offset: u64,
     protection: VaProtection,
     mapped_file_name: Option<String>,
+    data: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -608,6 +609,7 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
             offset,
             protection,
             mapped_file_name,
+            data: None,
         });
     }
 
@@ -778,6 +780,25 @@ impl ProcessView {
             aux_vector,
             page_size,
         })
+    }
+
+    /// Add arbitrary additional data to the core dump as memory
+    pub fn add_data(&mut self, data: Vec<u8>, va: u64) {
+        let len = data.len() as u64;
+        self.va_regions.push(VaRegion {
+            begin: va,
+            end: va + len,
+            protection: VaProtection {
+                is_private: false,
+                read: true,
+                write: false,
+                execute: false,
+            },
+            offset: 0,
+            mapped_file_name: None,
+            data: Some(data),
+        });
+        tracing::debug!("{:#x} bytes of data will be added at VA {:#x}", len, va);
     }
 }
 
@@ -1481,7 +1502,12 @@ fn write_va_regions<T: Write>(
     );
 
     for va_region in &pv.va_regions {
-        let dumped = write_va_region(writer, va_region, pv, &mut memory_reader)?;
+        let dumped = if let Some(data) = &va_region.data {
+            writer.write_all(data)?;
+            data.len()
+        } else {
+            write_va_region(writer, va_region, pv, &mut memory_reader)?
+        };
 
         written += dumped;
 
