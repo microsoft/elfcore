@@ -669,11 +669,12 @@ fn get_elf_notes_sizes(pv: &ProcessView) -> Result<NoteSizes, CoreError> {
             ) as usize
     };
 
-    let custom: usize = pv.custom_notes.iter().map(|(_, data)| header_and_name + data.len()).sum();
-    let custom = round_up(
-        custom as u64,
-        ELF_NOTE_PADDING as u64,
-    ) as usize;
+    let custom: usize = pv
+        .custom_notes
+        .iter()
+        .map(|(_, data)| header_and_name + data.len())
+        .sum();
+    let custom = round_up(custom as u64, ELF_NOTE_PADDING as u64) as usize;
 
     let total_note_size = process_info + process_status + aux_vector + mapped_files + custom;
 
@@ -1379,7 +1380,6 @@ fn write_custom_notes<T: Write>(
     writer: &mut ElfCoreWriter<T>,
     pv: &ProcessView,
 ) -> Result<usize, CoreError> {
-
     let mut total_written = 0;
 
     for (name, data) in &pv.custom_notes {
@@ -1397,7 +1397,6 @@ fn write_custom_notes<T: Write>(
 
     Ok(total_written)
 }
-
 
 fn write_elf_notes<T: Write>(
     writer: &mut ElfCoreWriter<T>,
@@ -1450,9 +1449,7 @@ fn write_elf_notes<T: Write>(
     if note_sizes.custom != 0 {
         written = write_custom_notes(writer, pv)?;
         if written != note_sizes.custom {
-            return Err(CoreError::InternalError(
-                "Mismatched custom note size",
-            ));
+            return Err(CoreError::InternalError("Mismatched custom note size"));
         }
         total_written += written;
     }
