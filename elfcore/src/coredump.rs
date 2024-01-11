@@ -334,7 +334,6 @@ struct VaRegion {
     offset: u64,
     protection: VaProtection,
     mapped_file_name: Option<String>,
-    data: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -357,6 +356,7 @@ struct NoteSizes {
     process_status: usize,
     aux_vector: usize,
     mapped_files: usize,
+    custom: usize,
     total_note_size: usize,
 }
 
@@ -370,6 +370,7 @@ pub struct ProcessView {
     // The kernel exposes some system configuration using it.
     aux_vector: Vec<Elf64_Auxv>,
     page_size: usize,
+    custom_notes: Vec<(String, Vec<u8>)>,
 }
 
 fn get_thread_ids(pid: Pid) -> Result<Vec<Pid>, CoreError> {
@@ -609,7 +610,6 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
             offset,
             protection,
             mapped_file_name,
-            data: None,
         });
     }
 
@@ -669,12 +669,19 @@ fn get_elf_notes_sizes(pv: &ProcessView) -> Result<NoteSizes, CoreError> {
             ) as usize
     };
 
-    let total_note_size = process_info + process_status + aux_vector + mapped_files;
+    let custom: usize = pv.custom_notes.iter().map(|(_, data)| header_and_name + data.len()).sum();
+    let custom = round_up(
+        custom as u64,
+        ELF_NOTE_PADDING as u64,
+    ) as usize;
+
+    let total_note_size = process_info + process_status + aux_vector + mapped_files + custom;
 
     tracing::info!("Estimated process info note size: {}", process_info);
     tracing::info!("Estimated process status note size: {}", process_status);
     tracing::info!("Estimated aux vector note size: {}", aux_vector);
     tracing::info!("Estimated mapped files note size: {}", mapped_files);
+    tracing::info!("Estimated custom note size: {}", custom);
     tracing::info!("Estimated total note size: {}", total_note_size);
 
     Ok(NoteSizes {
@@ -682,6 +689,7 @@ fn get_elf_notes_sizes(pv: &ProcessView) -> Result<NoteSizes, CoreError> {
         process_status,
         aux_vector,
         mapped_files,
+        custom,
         total_note_size,
     })
 }
@@ -779,26 +787,13 @@ impl ProcessView {
             mapped_files,
             aux_vector,
             page_size,
+            custom_notes: Vec::new(),
         })
     }
 
-    /// Add arbitrary additional data to the core dump as memory
-    pub fn add_data(&mut self, data: Vec<u8>, va: u64) {
-        let len = data.len() as u64;
-        self.va_regions.push(VaRegion {
-            begin: va,
-            end: va + len,
-            protection: VaProtection {
-                is_private: false,
-                read: true,
-                write: false,
-                execute: false,
-            },
-            offset: 0,
-            mapped_file_name: None,
-            data: Some(data),
-        });
-        tracing::debug!("{:#x} bytes of data will be added at VA {:#x}", len, va);
+    /// Add arbitrary additional data to the core dump as a note
+    pub fn add_note(&mut self, data: Vec<u8>, name: &str) {
+        self.custom_notes.push((name.to_owned(), data));
     }
 }
 
@@ -1380,6 +1375,30 @@ fn write_mapped_files_note<T: Write>(
     Ok(written)
 }
 
+fn write_custom_notes<T: Write>(
+    writer: &mut ElfCoreWriter<T>,
+    pv: &ProcessView,
+) -> Result<usize, CoreError> {
+
+    let mut total_written = 0;
+
+    for (name, data) in &pv.custom_notes {
+        tracing::info!(
+            "Writing custom note \"{}\" at offset {}...",
+            name,
+            writer.stream_position()?
+        );
+
+        let written = write_elf_note(writer, 0xffffffff, name.as_bytes(), data)?;
+
+        tracing::info!("Wrote {} bytes for the custom note", written);
+        total_written += written;
+    }
+
+    Ok(total_written)
+}
+
+
 fn write_elf_notes<T: Write>(
     writer: &mut ElfCoreWriter<T>,
     pv: &ProcessView,
@@ -1423,6 +1442,16 @@ fn write_elf_notes<T: Write>(
         if written != note_sizes.mapped_files {
             return Err(CoreError::InternalError(
                 "Mismatched mapped files note size",
+            ));
+        }
+        total_written += written;
+    }
+
+    if note_sizes.custom != 0 {
+        written = write_custom_notes(writer, pv)?;
+        if written != note_sizes.custom {
+            return Err(CoreError::InternalError(
+                "Mismatched custom note size",
             ));
         }
         total_written += written;
@@ -1502,12 +1531,7 @@ fn write_va_regions<T: Write>(
     );
 
     for va_region in &pv.va_regions {
-        let dumped = if let Some(data) = &va_region.data {
-            writer.write_all(data)?;
-            data.len()
-        } else {
-            write_va_region(writer, va_region, pv, &mut memory_reader)?
-        };
+        let dumped = write_va_region(writer, va_region, pv, &mut memory_reader)?;
 
         written += dumped;
 
