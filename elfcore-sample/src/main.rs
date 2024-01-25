@@ -53,7 +53,7 @@ pub fn main() -> anyhow::Result<()> {
     let process_view =
         elfcore::ProcessView::new(pid).context("failed to prepare process for core dump")?;
 
-    let n = elfcore::write_core_dump(output_file, &process_view)
+    let n = elfcore::write_core_dump(output_file, &process_view, None)
         .context("failed to write core dump")?;
 
     tracing::debug!("wrote {} bytes", n);
