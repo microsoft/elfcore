@@ -1149,7 +1149,7 @@ fn write_elf_note_header<T: Write>(
         writer.stream_position()?
     );
 
-    writer.write_all(&name_bytes)?;
+    writer.write_all(name_bytes)?;
     written += name_bytes.len();
 
     let padding = [0_u8; ELF_NOTE_ALIGN];
