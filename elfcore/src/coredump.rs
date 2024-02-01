@@ -843,16 +843,6 @@ fn process_vm_readv_works() -> bool {
     true
 }
 
-/// Writes an ELF core dump file
-///
-/// # Agruments:
-/// * `writer` - a `std::io::Write` the data is sent to.
-/// * `pv` - a `ProcessView` reference.
-///
-pub fn write_core_dump<T: Write>(writer: T, pv: &ProcessView) -> Result<usize, CoreError> {
-    CoreDumpBuilder::from_process_view(pv.clone()).write(writer)
-}
-
 fn round_up(value: usize, alignment: usize) -> usize {
     // Might be optimized if alignmet is a power of 2
 
@@ -993,36 +983,30 @@ fn write_elf_note_file<T: Write>(
     Ok(written)
 }
 
-struct CoreDumpBuilder {
+/// A builder for generating a core dump of a process by pid,
+/// optionally with custom notes with content from files
+pub struct CoreDumpBuilder {
     pv: ProcessView,
-    custom_notes: Option<Vec<CustomFileNote>>,
+    custom_notes: Vec<CustomFileNote>,
 }
 
 impl CoreDumpBuilder {
     /// Create a new core dump builder for the process with the provided PID
-    #[allow(dead_code)]
     pub fn new(pid: libc::pid_t) -> Result<Self, CoreError> {
         let pv = ProcessView::new(pid)?;
         Ok(Self {
             pv,
-            custom_notes: None,
+            custom_notes: Vec::new(),
         })
     }
 
-    fn from_process_view(pv: ProcessView) -> Self {
-        Self {
-            pv,
-            custom_notes: None,
-        }
-    }
-
     /// Add the contents of a file as a custom note to the core dump
-    #[allow(dead_code)]
-    pub fn add_custom_note(mut self, note: CustomFileNote) -> Self {
-        if self.custom_notes.is_none() {
-            self.custom_notes = Some(Vec::new());
-        }
-        self.custom_notes.as_mut().unwrap().push(note);
+    pub fn add_custom_file_note(mut self, name: &str, file: File, note_len: usize) -> Self {
+        self.custom_notes.push(CustomFileNote {
+            name: name.to_owned(),
+            file,
+            note_len,
+        });
         self
     }
 
@@ -1436,25 +1420,23 @@ impl CoreDumpBuilder {
     ) -> Result<usize, CoreError> {
         let mut total_written = 0;
 
-        if let Some(custom_notes) = &mut self.custom_notes {
-            for note in custom_notes {
-                tracing::info!(
-                    "Writing custom note \"{}\" at offset {}...",
-                    note.name,
-                    writer.stream_position()?
-                );
+        for note in &mut self.custom_notes {
+            tracing::info!(
+                "Writing custom note \"{}\" at offset {}...",
+                note.name,
+                writer.stream_position()?
+            );
 
-                let written = write_elf_note_file(
-                    writer,
-                    0xffffffff,
-                    note.name.as_bytes(),
-                    &mut note.file,
-                    note.note_len,
-                )?;
+            let written = write_elf_note_file(
+                writer,
+                0xffffffff,
+                note.name.as_bytes(),
+                &mut note.file,
+                note.note_len,
+            )?;
 
-                tracing::info!("Wrote {} bytes for the custom note", written);
-                total_written += written;
-            }
+            tracing::info!("Wrote {} bytes for the custom note", written);
+            total_written += written;
         }
 
         Ok(total_written)
@@ -1653,14 +1635,10 @@ impl CoreDumpBuilder {
             header_and_name + round_up(intro_size + addr_layout_size + string_size, ELF_NOTE_ALIGN)
         };
 
-        let custom = if let Some(custom_notes) = &self.custom_notes {
-            round_up(
-                custom_notes.iter().map(|x| x.note_len).sum::<usize>(),
-                ELF_NOTE_ALIGN,
-            )
-        } else {
-            0
-        };
+        let custom = round_up(
+            self.custom_notes.iter().map(|x| x.note_len).sum::<usize>(),
+            ELF_NOTE_ALIGN,
+        );
 
         let total_note_size = process_info + process_status + aux_vector + mapped_files + custom;
 

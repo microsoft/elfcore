@@ -12,7 +12,5 @@ mod elf;
 mod error;
 mod ptrace;
 
-pub use coredump::write_core_dump;
-pub use coredump::CustomFileNote;
-pub use coredump::ProcessView;
+pub use coredump::CoreDumpBuilder;
 pub use error::CoreError;
