@@ -19,7 +19,7 @@ mod aarch64;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::elf_gregset_t;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArchComponentState {
     pub name: &'static str,
     pub note_type: u32,
@@ -36,7 +36,7 @@ pub trait Arch {
     fn components(&self) -> &Vec<ArchComponentState>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArchState {
     // GP registers.
     gpr_state: Vec<u64>,
