@@ -1001,12 +1001,18 @@ impl CoreDumpBuilder {
     }
 
     /// Add the contents of a file as a custom note to the core dump
-    pub fn add_custom_file_note(mut self, name: &str, file: File, note_len: usize) -> Self {
+    pub fn add_custom_file_note(&mut self, name: &str, file: File, note_len: usize) -> &mut Self {
         self.custom_notes.push(CustomFileNote {
             name: name.to_owned(),
             file,
             note_len,
         });
+        self
+    }
+
+    /// Add the contents of a file as a custom note to the core dump
+    pub fn with_custom_file_note(mut self, name: &str, file: File, note_len: usize) -> Self {
+        self.add_custom_file_note(name, file, note_len);
         self
     }
 

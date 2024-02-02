@@ -53,14 +53,12 @@ pub fn main() -> anyhow::Result<()> {
         .with_max_level(level)
         .init();
 
-    let builder = elfcore::CoreDumpBuilder::new(pid)?;
-    let builder = if let Some(path) = note_file_path {
+    let mut builder = elfcore::CoreDumpBuilder::new(pid)?;
+    if let Some(path) = note_file_path {
         let path: PathBuf = path.parse().context("failed to parse note file path")?;
         let file = std::fs::File::open(path).context("failed to open note file")?;
-        builder.add_custom_file_note("TEST", file, 100)
-    } else {
-        builder
-    };
+        builder.add_custom_file_note("TEST", file, 100);
+    }
     let n = builder.write(output_file)?;
 
     tracing::debug!("wrote {} bytes", n);
