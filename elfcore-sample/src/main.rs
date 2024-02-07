@@ -57,7 +57,7 @@ pub fn main() -> anyhow::Result<()> {
     if let Some(path) = note_file_path {
         let path: PathBuf = path.parse().context("failed to parse note file path")?;
         let file = std::fs::File::open(path).context("failed to open note file")?;
-        builder.add_custom_file_note("TEST", file, 100);
+        builder.add_custom_file_note("TEST", Box::new(file), 100);
     }
     let n = builder.write(output_file)?;
 
