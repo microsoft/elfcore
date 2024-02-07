@@ -27,7 +27,6 @@ use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::BufRead;
-use std::io::ErrorKind;
 use std::io::IoSliceMut;
 use std::io::Read;
 use std::io::Seek;
@@ -381,11 +380,11 @@ pub struct ProcessView {
 }
 
 /// Information about a custom note that will be created from a file
-pub struct CustomFileNote {
+struct CustomFileNote {
     /// Name used in the ELF note header
     pub name: String,
     /// (nonblocking) file to read from
-    pub file: File,
+    pub file: Box<dyn Read>,
     /// Fixed size of the note, including header, name, data, and size
     /// File contents will be padded or truncated to fit.
     pub note_len: usize,
@@ -921,6 +920,7 @@ fn process_vm_readv_works() -> bool {
 /// * `writer` - a `std::io::Write` the data is sent to.
 /// * `pv` - a `ProcessView` reference.
 ///
+/// To access new functionality, use [`CoreDumpBuilder`]
 pub fn write_core_dump<T: Write>(writer: T, pv: &ProcessView) -> Result<usize, CoreError> {
     write_core_dump_inner(writer, pv, None)
 }
@@ -1191,7 +1191,7 @@ fn write_elf_note_file<T: Write>(
     writer: &mut ElfCoreWriter<T>,
     note_kind: u32,
     name_bytes: &[u8],
-    file: &mut File,
+    file: &mut dyn Read,
     note_len: usize,
 ) -> Result<usize, CoreError> {
     let mut written = 0_usize;
@@ -1212,12 +1212,7 @@ fn write_elf_note_file<T: Write>(
     let mut total = 0;
     loop {
         match file.read(&mut buf) {
-            // if eof or would block, we are done
             Ok(0) => break,
-            Err(ref err) if err.kind() == ErrorKind::WouldBlock => break,
-            // continue on interruptions
-            Err(ref err) if err.kind() == ErrorKind::Interrupted => {}
-            // append the data
             Ok(len) => {
                 if total + len > max_len {
                     tracing::error!("file will be truncated.");
@@ -1651,18 +1646,17 @@ impl CoreDumpBuilder {
     }
 
     /// Add the contents of a file as a custom note to the core dump
-    pub fn add_custom_file_note(&mut self, name: &str, file: File, note_len: usize) -> &mut Self {
+    pub fn add_custom_file_note(
+        &mut self,
+        name: &str,
+        file: Box<dyn Read>,
+        note_len: usize,
+    ) -> &mut Self {
         self.custom_notes.push(CustomFileNote {
             name: name.to_owned(),
             file,
             note_len,
         });
-        self
-    }
-
-    /// Add the contents of a file as a custom note to the core dump
-    pub fn with_custom_file_note(mut self, name: &str, file: File, note_len: usize) -> Self {
-        self.add_custom_file_note(name, file, note_len);
         self
     }
 
