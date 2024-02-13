@@ -54,11 +54,19 @@ pub fn main() -> anyhow::Result<()> {
         .init();
 
     let mut builder = elfcore::CoreDumpBuilder::new(pid)?;
-    if let Some(path) = note_file_path {
-        let path: PathBuf = path.parse().context("failed to parse note file path")?;
-        let file = std::fs::File::open(path).context("failed to open note file")?;
-        builder.add_custom_file_note("TEST", Box::new(file), 100);
+
+    let mut file = note_file_path
+        .map(|path| {
+            path.parse::<PathBuf>()
+                .context("failed to parse note file path")
+        })
+        .transpose()?
+        .map(|path| std::fs::File::open(path).context("failed to open note file"))
+        .transpose()?;
+    if let Some(file) = file.as_mut() {
+        builder.add_custom_file_note("TEST", file, 100);
     }
+
     let n = builder.write(output_file)?;
 
     tracing::debug!("wrote {} bytes", n);

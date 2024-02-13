@@ -380,11 +380,11 @@ pub struct ProcessView {
 }
 
 /// Information about a custom note that will be created from a file
-struct CustomFileNote {
+struct CustomFileNote<'a> {
     /// Name used in the ELF note header
     pub name: String,
     /// (nonblocking) file to read from
-    pub file: Box<dyn Read>,
+    pub file: &'a mut dyn Read,
     /// Fixed size of the note, including header, name, data, and size
     /// File contents will be padded or truncated to fit.
     pub note_len: usize,
@@ -637,7 +637,7 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
 
 fn get_elf_notes_sizes(
     pv: &ProcessView,
-    custom_notes: Option<&[CustomFileNote]>,
+    custom_notes: Option<&[CustomFileNote<'_>]>,
 ) -> Result<NoteSizes, CoreError> {
     let header_and_name =
         std::mem::size_of::<Elf64_Nhdr>() + round_up(NOTE_NAME_CORE.len() + 1, ELF_NOTE_ALIGN);
@@ -928,7 +928,7 @@ pub fn write_core_dump<T: Write>(writer: T, pv: &ProcessView) -> Result<usize, C
 fn write_core_dump_inner<T: Write>(
     writer: T,
     pv: &ProcessView,
-    custom_notes: Option<&mut [CustomFileNote]>,
+    custom_notes: Option<&mut [CustomFileNote<'_>]>,
 ) -> Result<usize, CoreError> {
     let mut total_written = 0_usize;
     let mut writer = ElfCoreWriter::new(writer);
@@ -1208,27 +1208,9 @@ fn write_elf_note_file<T: Write>(
     );
 
     let max_len = data_len - std::mem::size_of::<u32>();
-    let mut buf = [0_u8; BUFFER_SIZE];
-    let mut total = 0;
-    loop {
-        match file.read(&mut buf) {
-            Ok(0) => break,
-            Ok(len) => {
-                if total + len > max_len {
-                    tracing::error!("file will be truncated.");
-                    let len = max_len - total;
-                    total += len;
-                    writer.write_all(&buf[..len])?;
-                    break;
-                }
-                total += len;
-                writer.write_all(&buf[..len])?;
-            }
-            Err(e) => {
-                tracing::error!("error reading file: {:?}", e);
-                break;
-            }
-        }
+    let total = std::io::copy(&mut file.take(max_len as u64), writer)? as usize;
+    if file.read(&mut [0]).unwrap_or(0) != 0 {
+        tracing::warn!(truncated_len = total, "note will be truncated");
     }
     written += total;
 
@@ -1457,7 +1439,7 @@ fn write_mapped_files_note<T: Write>(
 
 fn write_custom_notes<T: Write>(
     writer: &mut ElfCoreWriter<T>,
-    custom_notes: &mut [CustomFileNote],
+    custom_notes: &mut [CustomFileNote<'_>],
 ) -> Result<usize, CoreError> {
     let mut total_written = 0;
 
@@ -1487,7 +1469,7 @@ fn write_elf_notes<T: Write>(
     writer: &mut ElfCoreWriter<T>,
     pv: &ProcessView,
     note_sizes: &NoteSizes,
-    custom_notes: Option<&mut [CustomFileNote]>,
+    custom_notes: Option<&mut [CustomFileNote<'_>]>,
 ) -> Result<usize, CoreError> {
     let mut total_written = 0_usize;
     let mut written;
@@ -1630,12 +1612,12 @@ fn write_va_regions<T: Write>(
 
 /// A builder for generating a core dump of a process by pid,
 /// optionally with custom notes with content from files
-pub struct CoreDumpBuilder {
+pub struct CoreDumpBuilder<'a> {
     pv: ProcessView,
-    custom_notes: Vec<CustomFileNote>,
+    custom_notes: Vec<CustomFileNote<'a>>,
 }
 
-impl CoreDumpBuilder {
+impl<'a> CoreDumpBuilder<'a> {
     /// Create a new core dump builder for the process with the provided PID
     pub fn new(pid: libc::pid_t) -> Result<Self, CoreError> {
         let pv = ProcessView::new(pid)?;
@@ -1649,7 +1631,7 @@ impl CoreDumpBuilder {
     pub fn add_custom_file_note(
         &mut self,
         name: &str,
-        file: Box<dyn Read>,
+        file: &'a mut dyn Read,
         note_len: usize,
     ) -> &mut Self {
         self.custom_notes.push(CustomFileNote {
