@@ -36,8 +36,14 @@ use zerocopy::AsBytes;
 use zerocopy::FromZeroes;
 
 const ELF_HEADER_ALIGN: usize = 8;
-const NOTE_HEADER_PADDING: usize = 8;
-const ELF_NOTE_PADDING: usize = 4;
+const ELF_NOTE_ALIGN: usize = 4;
+
+const NOTE_NAME_CORE: &[u8] = b"CORE";
+
+// For optimal performance should be in [8KiB; 64KiB] range.
+// Selected 64 KiB as data on various hardware platforms shows
+// peak performance in this case.
+const BUFFER_SIZE: usize = 0x10000;
 
 /// Wraps a Write to emulate forward seeks
 struct ElfCoreWriter<T: Write> {
@@ -70,13 +76,14 @@ where
         Self { writer, written: 0 }
     }
 
-    pub fn align_position(&mut self, alignment: u64) -> std::io::Result<usize> {
-        const INLINE_CAPACITY: usize = 0x10000;
-
-        let buf: SmallVec<[u8; INLINE_CAPACITY]> =
-            smallvec![0; round_up(self.written as u64, alignment) as usize - self.written];
+    pub fn write_padding(&mut self, bytes: usize) -> std::io::Result<usize> {
+        let buf: SmallVec<[u8; BUFFER_SIZE]> = smallvec![0; bytes];
         self.write_all(&buf)?;
         Ok(buf.len())
+    }
+
+    pub fn align_position(&mut self, alignment: usize) -> std::io::Result<usize> {
+        self.write_padding(round_up(self.written, alignment) - self.written)
     }
 
     pub fn stream_position(&self) -> std::io::Result<usize> {
@@ -334,7 +341,6 @@ struct VaRegion {
     offset: u64,
     protection: VaProtection,
     mapped_file_name: Option<String>,
-    data: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -357,6 +363,7 @@ struct NoteSizes {
     process_status: usize,
     aux_vector: usize,
     mapped_files: usize,
+    custom: usize,
     total_note_size: usize,
 }
 
@@ -370,6 +377,17 @@ pub struct ProcessView {
     // The kernel exposes some system configuration using it.
     aux_vector: Vec<Elf64_Auxv>,
     page_size: usize,
+}
+
+/// Information about a custom note that will be created from a file
+struct CustomFileNote<'a> {
+    /// Name used in the ELF note header
+    pub name: String,
+    /// (nonblocking) file to read from
+    pub file: &'a mut dyn Read,
+    /// Fixed size of the note, including header, name, data, and size
+    /// File contents will be padded or truncated to fit.
+    pub note_len: usize,
 }
 
 fn get_thread_ids(pid: Pid) -> Result<Vec<Pid>, CoreError> {
@@ -609,7 +627,6 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
             offset,
             protection,
             mapped_file_name,
-            data: None,
         });
     }
 
@@ -618,21 +635,19 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
     Ok((maps, mapped_files, vdso))
 }
 
-fn get_elf_notes_sizes(pv: &ProcessView) -> Result<NoteSizes, CoreError> {
-    let header_and_name = std::mem::size_of::<Elf64_Nhdr>() + NOTE_HEADER_PADDING;
-    let process_info = header_and_name
-        + round_up(
-            std::mem::size_of::<prpsinfo_t>() as u64,
-            ELF_NOTE_PADDING as u64,
-        ) as usize;
+fn get_elf_notes_sizes(
+    pv: &ProcessView,
+    custom_notes: Option<&[CustomFileNote<'_>]>,
+) -> Result<NoteSizes, CoreError> {
+    let header_and_name =
+        std::mem::size_of::<Elf64_Nhdr>() + round_up(NOTE_NAME_CORE.len() + 1, ELF_NOTE_ALIGN);
+    let process_info =
+        header_and_name + round_up(std::mem::size_of::<prpsinfo_t>(), ELF_NOTE_ALIGN);
     let one_thread_status = header_and_name
-        + round_up(
-            std::mem::size_of::<siginfo_t>() as u64,
-            ELF_NOTE_PADDING as u64,
-        ) as usize
+        + round_up(std::mem::size_of::<siginfo_t>(), ELF_NOTE_ALIGN)
         + header_and_name
         + round_up(
-            (std::mem::size_of::<prstatus_t>() + {
+            std::mem::size_of::<prstatus_t>() + {
                 let mut arch_size = 0;
                 for component in pv
                     .threads
@@ -644,9 +659,9 @@ fn get_elf_notes_sizes(pv: &ProcessView) -> Result<NoteSizes, CoreError> {
                     arch_size += header_and_name + component.data.len();
                 }
                 arch_size
-            }) as u64,
-            ELF_NOTE_PADDING as u64,
-        ) as usize;
+            },
+            ELF_NOTE_ALIGN,
+        );
     let process_status = one_thread_status * pv.threads.len();
     let aux_vector = header_and_name + pv.aux_vector.len() * std::mem::size_of::<Elf64_Auxv>();
 
@@ -662,19 +677,25 @@ fn get_elf_notes_sizes(pv: &ProcessView) -> Result<NoteSizes, CoreError> {
 
         let intro_size = std::mem::size_of::<MappedFilesNoteIntro>();
 
-        header_and_name
-            + round_up(
-                (intro_size + addr_layout_size + string_size) as u64,
-                ELF_NOTE_PADDING as u64,
-            ) as usize
+        header_and_name + round_up(intro_size + addr_layout_size + string_size, ELF_NOTE_ALIGN)
     };
 
-    let total_note_size = process_info + process_status + aux_vector + mapped_files;
+    let custom = if let Some(custom_notes) = custom_notes {
+        round_up(
+            custom_notes.iter().map(|x| x.note_len).sum::<usize>(),
+            ELF_NOTE_ALIGN,
+        )
+    } else {
+        0
+    };
+
+    let total_note_size = process_info + process_status + aux_vector + mapped_files + custom;
 
     tracing::info!("Estimated process info note size: {}", process_info);
     tracing::info!("Estimated process status note size: {}", process_status);
     tracing::info!("Estimated aux vector note size: {}", aux_vector);
     tracing::info!("Estimated mapped files note size: {}", mapped_files);
+    tracing::info!("Estimated custom note size: {}", custom);
     tracing::info!("Estimated total note size: {}", total_note_size);
 
     Ok(NoteSizes {
@@ -682,6 +703,7 @@ fn get_elf_notes_sizes(pv: &ProcessView) -> Result<NoteSizes, CoreError> {
         process_status,
         aux_vector,
         mapped_files,
+        custom,
         total_note_size,
     })
 }
@@ -780,25 +802,6 @@ impl ProcessView {
             aux_vector,
             page_size,
         })
-    }
-
-    /// Add arbitrary additional data to the core dump as memory
-    pub fn add_data(&mut self, data: Vec<u8>, va: u64) {
-        let len = data.len() as u64;
-        self.va_regions.push(VaRegion {
-            begin: va,
-            end: va + len,
-            protection: VaProtection {
-                is_private: false,
-                read: true,
-                write: false,
-                execute: false,
-            },
-            offset: 0,
-            mapped_file_name: None,
-            data: Some(data),
-        });
-        tracing::debug!("{:#x} bytes of data will be added at VA {:#x}", len, va);
     }
 }
 
@@ -917,7 +920,16 @@ fn process_vm_readv_works() -> bool {
 /// * `writer` - a `std::io::Write` the data is sent to.
 /// * `pv` - a `ProcessView` reference.
 ///
+/// To access new functionality, use [`CoreDumpBuilder`]
 pub fn write_core_dump<T: Write>(writer: T, pv: &ProcessView) -> Result<usize, CoreError> {
+    write_core_dump_inner(writer, pv, None)
+}
+
+fn write_core_dump_inner<T: Write>(
+    writer: T,
+    pv: &ProcessView,
+    custom_notes: Option<&mut [CustomFileNote<'_>]>,
+) -> Result<usize, CoreError> {
     let mut total_written = 0_usize;
     let mut writer = ElfCoreWriter::new(writer);
 
@@ -936,14 +948,14 @@ pub fn write_core_dump<T: Write>(writer: T, pv: &ProcessView) -> Result<usize, C
         Box::new(SlowMemoryReader::new(pv.pid)?) as Box<dyn ReadProcessMemory>
     };
 
-    let note_sizes = get_elf_notes_sizes(pv)?;
+    let note_sizes = get_elf_notes_sizes(pv, custom_notes.as_deref())?;
 
     total_written += write_elf_header(&mut writer, pv)?;
-    total_written += writer.align_position(ELF_HEADER_ALIGN as u64)?;
+    total_written += writer.align_position(ELF_HEADER_ALIGN)?;
     total_written += write_program_headers(&mut writer, pv, &note_sizes)?;
-    total_written += writer.align_position(ELF_HEADER_ALIGN as u64)?;
-    total_written += write_elf_notes(&mut writer, pv, &note_sizes)?;
-    total_written += writer.align_position(pv.page_size as u64)?;
+    total_written += writer.align_position(ELF_HEADER_ALIGN)?;
+    total_written += write_elf_notes(&mut writer, pv, &note_sizes, custom_notes)?;
+    total_written += writer.align_position(pv.page_size)?;
     total_written += write_va_regions(&mut writer, pv, memory_reader)?;
 
     tracing::info!("Wrote {} bytes for ELF core dump", total_written);
@@ -951,7 +963,7 @@ pub fn write_core_dump<T: Write>(writer: T, pv: &ProcessView) -> Result<usize, C
     Ok(total_written)
 }
 
-fn round_up(value: u64, alignment: u64) -> u64 {
+fn round_up(value: usize, alignment: usize) -> usize {
     // Might be optimized if alignmet is a power of 2
 
     if value == 0 {
@@ -1034,8 +1046,7 @@ fn write_program_headers<T: Write>(
 
     let phdr_size = std::mem::size_of::<Elf64_Phdr>() * (pv.va_regions.len() + 1);
     let ehdr_size = std::mem::size_of::<Elf64_Ehdr>();
-    let data_offset = round_up(ehdr_size as u64, ELF_HEADER_ALIGN as u64)
-        + round_up(phdr_size as u64, ELF_HEADER_ALIGN as u64);
+    let data_offset = round_up(ehdr_size, ELF_HEADER_ALIGN) + round_up(phdr_size, ELF_HEADER_ALIGN);
 
     {
         let mut note_header = Elf64_Phdr {
@@ -1046,7 +1057,7 @@ fn write_program_headers<T: Write>(
             p_filesz: note_sizes.total_note_size as u64,
             p_memsz: note_sizes.total_note_size as u64,
             p_align: 1,
-            p_offset: data_offset, // Notes are written after the headers
+            p_offset: data_offset as u64, // Notes are written after the headers
         };
 
         // SAFETY: Elf64_Phdr is repr(C) with no padding bytes,
@@ -1061,10 +1072,7 @@ fn write_program_headers<T: Write>(
         written += slice.len();
     }
 
-    let mut current_offset = round_up(
-        data_offset + note_sizes.total_note_size as u64,
-        pv.page_size as u64,
-    );
+    let mut current_offset = round_up(data_offset + note_sizes.total_note_size, pv.page_size);
 
     for region in &pv.va_regions {
         let mut seg_header = Elf64_Phdr {
@@ -1087,7 +1095,7 @@ fn write_program_headers<T: Write>(
 
                 seg_prot
             },
-            p_offset: current_offset,
+            p_offset: current_offset as u64,
             p_vaddr: region.begin,
             p_paddr: 0,
             p_filesz: region.end - region.begin,
@@ -1106,10 +1114,52 @@ fn write_program_headers<T: Write>(
         writer.write_all(slice)?;
         written += slice.len();
 
-        current_offset += seg_header.p_filesz;
+        current_offset += seg_header.p_filesz as usize;
     }
 
     tracing::info!("Wrote {} bytes", written);
+
+    Ok(written)
+}
+
+fn write_elf_note_header<T: Write>(
+    writer: &mut ElfCoreWriter<T>,
+    note_kind: u32,
+    name_bytes: &[u8],
+    data_len: usize,
+) -> Result<usize, CoreError> {
+    let mut written = 0_usize;
+
+    // namesz accounts for the terminating zero.
+    // ELF-64 Object File Format, Version 1.5 claims that is not required
+    // but readelf and gdb refuse to read it otherwise
+
+    let namesz = name_bytes.len() + 1;
+    let note_header = Elf64_Nhdr {
+        ntype: note_kind,
+        namesz: namesz as u32,
+        descsz: data_len as u32,
+    };
+
+    tracing::debug!(
+        "Writing note header at offset {}...",
+        writer.stream_position()?
+    );
+    writer.write_all(note_header.as_bytes())?;
+    written += std::mem::size_of::<Elf64_Nhdr>();
+
+    tracing::debug!(
+        "Writing note name at offset {}...",
+        writer.stream_position()?
+    );
+
+    writer.write_all(name_bytes)?;
+    written += name_bytes.len();
+
+    let padding = [0_u8; ELF_NOTE_ALIGN];
+    let padding_len = round_up(namesz, ELF_NOTE_ALIGN) - namesz + 1;
+    writer.write_all(&padding[..padding_len])?;
+    written += padding_len;
 
     Ok(written)
 }
@@ -1122,38 +1172,7 @@ fn write_elf_note<T: Write>(
 ) -> Result<usize, CoreError> {
     let mut written = 0_usize;
 
-    let mut note_header = Elf64_Nhdr {
-        ntype: note_kind,
-        namesz: std::cmp::min(name_bytes.len() as u32, 7),
-        descsz: data.len() as u32,
-    };
-
-    let mut note_name = [0_u8; 8];
-    for i in 0..note_header.namesz {
-        note_name[i as usize] = name_bytes[i as usize];
-    }
-
-    // Account for the terminating zero.
-    // ELF-64 Object File Format, Version 1.5 claims that is not required
-    // but readelf and gdb refuse to read it otherwise
-
-    note_header.namesz += 1;
-
-    tracing::debug!(
-        "Writing note header at offset {}...",
-        writer.stream_position()?
-    );
-
-    writer.write_all(note_header.as_bytes())?;
-    written += note_header.as_bytes().len();
-
-    tracing::debug!(
-        "Writing note name at offset {}...",
-        writer.stream_position()?
-    );
-
-    writer.write_all(&note_name)?;
-    written += note_name.len();
+    written += write_elf_note_header(writer, note_kind, name_bytes, data.len())?;
 
     tracing::debug!(
         "Writing note payload {} bytes at offset {}...",
@@ -1163,7 +1182,45 @@ fn write_elf_note<T: Write>(
 
     writer.write_all(data)?;
     written += data.len();
-    written += writer.align_position(ELF_NOTE_PADDING as u64)?;
+    written += writer.align_position(ELF_NOTE_ALIGN)?;
+
+    Ok(written)
+}
+
+fn write_elf_note_file<T: Write>(
+    writer: &mut ElfCoreWriter<T>,
+    note_kind: u32,
+    name_bytes: &[u8],
+    file: &mut dyn Read,
+    note_len: usize,
+) -> Result<usize, CoreError> {
+    let mut written = 0_usize;
+
+    let header_and_name =
+        std::mem::size_of::<Elf64_Nhdr>() + round_up(name_bytes.len() + 1, ELF_NOTE_ALIGN);
+    let data_len = note_len - header_and_name;
+    written += write_elf_note_header(writer, note_kind, name_bytes, data_len)?;
+
+    tracing::debug!(
+        "Writing note payload {} bytes at offset {}...",
+        data_len,
+        writer.stream_position()?
+    );
+
+    let max_len = data_len - std::mem::size_of::<u32>();
+    let total = std::io::copy(&mut file.take(max_len as u64), writer)? as usize;
+    if file.read(&mut [0]).unwrap_or(0) != 0 {
+        tracing::warn!(truncated_len = total, "note will be truncated");
+    }
+    written += total;
+
+    if total < max_len {
+        written += writer.write_padding(max_len - total)?;
+    }
+
+    writer.write_all((total as u32).as_bytes())?;
+    written += std::mem::size_of::<u32>();
+    written += writer.align_position(ELF_NOTE_ALIGN)?;
 
     Ok(written)
 }
@@ -1226,7 +1283,7 @@ fn write_process_info_note<T: Write>(
                     args
                 },
             };
-            written = write_elf_note(writer, NT_PRPSINFO, b"CORE", pr_info.as_bytes())?;
+            written = write_elf_note(writer, NT_PRPSINFO, NOTE_NAME_CORE, pr_info.as_bytes())?;
             break;
         }
     }
@@ -1289,7 +1346,7 @@ fn write_process_status_notes<T: Write>(
             si_data: [0_u32; 28],
         };
 
-        let mut written = write_elf_note(writer, NT_PRSTATUS, b"CORE", status.as_bytes())?;
+        let mut written = write_elf_note(writer, NT_PRSTATUS, NOTE_NAME_CORE, status.as_bytes())?;
         total_written += written;
 
         for arch_component in thread_view.arch_state.components() {
@@ -1302,7 +1359,7 @@ fn write_process_status_notes<T: Write>(
             total_written += written;
         }
 
-        written = write_elf_note(writer, NT_SIGINFO, b"CORE", signals.as_bytes())?;
+        written = write_elf_note(writer, NT_SIGINFO, NOTE_NAME_CORE, signals.as_bytes())?;
         total_written += written;
     }
 
@@ -1324,7 +1381,7 @@ fn write_aux_vector_note<T: Write>(
         writer.stream_position()?
     );
 
-    let written = write_elf_note(writer, NT_AUXV, b"CORE", pv.aux_vector.as_bytes())?;
+    let written = write_elf_note(writer, NT_AUXV, NOTE_NAME_CORE, pv.aux_vector.as_bytes())?;
 
     tracing::info!("Wrote {} bytes for the auxiliary vector", written);
 
@@ -1335,7 +1392,7 @@ fn write_mapped_files_note<T: Write>(
     writer: &mut ElfCoreWriter<T>,
     pv: &ProcessView,
 ) -> Result<usize, CoreError> {
-    tracing::debug!(
+    tracing::info!(
         "Writing mapped files note at offset {}...",
         writer.stream_position()?
     );
@@ -1373,17 +1430,46 @@ fn write_mapped_files_note<T: Write>(
         }
     }
 
-    let written = write_elf_note(writer, NT_FILE, b"CORE", data.as_bytes())?;
+    let written = write_elf_note(writer, NT_FILE, NOTE_NAME_CORE, data.as_bytes())?;
 
-    tracing::debug!("Wrote {} bytes for mapped files note", written);
+    tracing::info!("Wrote {} bytes for mapped files note", written);
 
     Ok(written)
+}
+
+fn write_custom_notes<T: Write>(
+    writer: &mut ElfCoreWriter<T>,
+    custom_notes: &mut [CustomFileNote<'_>],
+) -> Result<usize, CoreError> {
+    let mut total_written = 0;
+
+    for note in custom_notes {
+        tracing::info!(
+            "Writing custom note \"{}\" at offset {}...",
+            note.name,
+            writer.stream_position()?
+        );
+
+        let written = write_elf_note_file(
+            writer,
+            0xffffffff,
+            note.name.as_bytes(),
+            &mut note.file,
+            note.note_len,
+        )?;
+
+        tracing::info!("Wrote {} bytes for the custom note", written);
+        total_written += written;
+    }
+
+    Ok(total_written)
 }
 
 fn write_elf_notes<T: Write>(
     writer: &mut ElfCoreWriter<T>,
     pv: &ProcessView,
     note_sizes: &NoteSizes,
+    custom_notes: Option<&mut [CustomFileNote<'_>]>,
 ) -> Result<usize, CoreError> {
     let mut total_written = 0_usize;
     let mut written;
@@ -1428,6 +1514,14 @@ fn write_elf_notes<T: Write>(
         total_written += written;
     }
 
+    if let Some(custom_notes) = custom_notes {
+        written = write_custom_notes(writer, custom_notes)?;
+        if written != note_sizes.custom {
+            return Err(CoreError::InternalError("Mismatched custom note size"));
+        }
+        total_written += written;
+    }
+
     tracing::info!("Wrote {} bytes for notes", total_written);
 
     Ok(total_written)
@@ -1439,11 +1533,6 @@ fn write_va_region<T: Write>(
     pv: &ProcessView,
     memory_reader: &mut Box<dyn ReadProcessMemory>,
 ) -> Result<usize, CoreError> {
-    // For optimal performance should be in [8KiB; 64KiB] range.
-    // Selected 64 KiB as data on various hardware platforms shows
-    // peak performance in this case.
-    const BUFFER_SIZE: usize = 0x10000;
-
     let mut dumped = 0_usize;
     let mut address = va_region.begin;
     let mut buffer = [0_u8; BUFFER_SIZE];
@@ -1502,12 +1591,7 @@ fn write_va_regions<T: Write>(
     );
 
     for va_region in &pv.va_regions {
-        let dumped = if let Some(data) = &va_region.data {
-            writer.write_all(data)?;
-            data.len()
-        } else {
-            write_va_region(writer, va_region, pv, &mut memory_reader)?
-        };
+        let dumped = write_va_region(writer, va_region, pv, &mut memory_reader)?;
 
         written += dumped;
 
@@ -1524,4 +1608,45 @@ fn write_va_regions<T: Write>(
     tracing::info!("Wrote {} bytes for VA regions", written);
 
     Ok(written)
+}
+
+/// A builder for generating a core dump of a process by pid,
+/// optionally with custom notes with content from files
+pub struct CoreDumpBuilder<'a> {
+    pv: ProcessView,
+    custom_notes: Vec<CustomFileNote<'a>>,
+}
+
+impl<'a> CoreDumpBuilder<'a> {
+    /// Create a new core dump builder for the process with the provided PID
+    pub fn new(pid: libc::pid_t) -> Result<Self, CoreError> {
+        let pv = ProcessView::new(pid)?;
+        Ok(Self {
+            pv,
+            custom_notes: Vec::new(),
+        })
+    }
+
+    /// Add the contents of a file as a custom note to the core dump
+    pub fn add_custom_file_note(
+        &mut self,
+        name: &str,
+        file: &'a mut dyn Read,
+        note_len: usize,
+    ) -> &mut Self {
+        self.custom_notes.push(CustomFileNote {
+            name: name.to_owned(),
+            file,
+            note_len,
+        });
+        self
+    }
+
+    /// Writes an ELF core dump file
+    ///
+    /// # Agruments:
+    /// * `writer` - a `std::io::Write` the data is sent to.
+    pub fn write<T: Write>(mut self, writer: T) -> Result<usize, CoreError> {
+        write_core_dump_inner(writer, &self.pv, Some(&mut self.custom_notes))
+    }
 }

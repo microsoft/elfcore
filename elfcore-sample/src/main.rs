@@ -39,6 +39,9 @@ pub fn main() -> anyhow::Result<()> {
         .parse()
         .context("failed to parse output_path")?;
 
+    // file to add as a note
+    let note_file_path = args.next();
+
     if args.next().is_some() {
         anyhow::bail!("unexpected extra arguments");
     }
@@ -50,11 +53,21 @@ pub fn main() -> anyhow::Result<()> {
         .with_max_level(level)
         .init();
 
-    let process_view =
-        elfcore::ProcessView::new(pid).context("failed to prepare process for core dump")?;
+    let mut builder = elfcore::CoreDumpBuilder::new(pid)?;
 
-    let n = elfcore::write_core_dump(output_file, &process_view)
-        .context("failed to write core dump")?;
+    let mut file = note_file_path
+        .map(|path| {
+            path.parse::<PathBuf>()
+                .context("failed to parse note file path")
+        })
+        .transpose()?
+        .map(|path| std::fs::File::open(path).context("failed to open note file"))
+        .transpose()?;
+    if let Some(file) = file.as_mut() {
+        builder.add_custom_file_note("TEST", file, 100);
+    }
+
+    let n = builder.write(output_file)?;
 
     tracing::debug!("wrote {} bytes", n);
     Ok(())
