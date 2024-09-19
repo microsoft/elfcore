@@ -5,11 +5,12 @@ memory dumps of running processes on Linux without external dependencies. Dumps
 are generated using the ELF core dump format. Documentation can be found in the
 corresponding rustdoc for the crate.
 
-Included is a small sample program `elfcore-example` that creates an ELF core
+Included is a small sample program `elfcore-sample` that creates an ELF core
 dump of a specified process. Run it with something like:
 ```bash
-cargo run elfcore-example -- <pid> dump.core
+cargo run -- <pid> dump.core
 ```
+Add `-v` for the more verbose logging.
 
 ## Contributing
 
