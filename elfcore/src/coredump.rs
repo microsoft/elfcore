@@ -630,7 +630,21 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
         });
     }
 
-    maps.sort_by_key(|x| x.begin);
+    // When the system is under stress and might OOM, or the program
+    // whose core dump is being captured might be terminated by some
+    // watchdog, it should be preferred to save the smaller regions of the
+    // VA space first as these are more likely to have the stack memory
+    // as opposed to the heap.
+    //
+    // As for the OOM argument, if the memory being read was paged
+    // out, reading it brings it back from the swap file increasing the memory
+    // pressure and increasing the chances of OOM-ing the system as
+    // Linux overcommits by default. That said, saving the smaller VA
+    // regions first likely helps to captre more and likely the stack memory.
+    //
+    // Sort the VA regioon by the size increasing to have better chances of
+    // capturing the stack memory before the program goes away.
+    maps.sort_by_key(|x| x.end - x.begin);
 
     Ok((maps, mapped_files, vdso))
 }
