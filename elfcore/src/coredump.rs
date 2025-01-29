@@ -23,6 +23,7 @@ use nix::unistd::Pid;
 use nix::unistd::SysconfVar;
 use smallvec::smallvec;
 use smallvec::SmallVec;
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
@@ -377,6 +378,7 @@ pub struct ProcessView {
     // The kernel exposes some system configuration using it.
     aux_vector: Vec<Elf64_Auxv>,
     page_size: usize,
+    memory_reader: Box<dyn ReadProcessMemory>,
 }
 
 /// Information about a custom note that will be created from a file
@@ -446,7 +448,10 @@ fn get_aux_vector(pid: Pid) -> Result<Vec<Elf64_Auxv>, CoreError> {
     Ok(auxv)
 }
 
-fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), CoreError> {
+fn get_va_regions(
+    pid: Pid,
+    memory_reader: &dyn ReadProcessMemory,
+) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), CoreError> {
     let mut maps: Vec<VaRegion> = Vec::new();
     let mut vdso = 0_u64;
 
@@ -539,14 +544,8 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
 
                 let maybe_elf_hdr: Option<Elf64_Ehdr> = {
                     let mut elf_hdr = Elf64_Ehdr::new_zeroed();
-                    match process_vm_readv(
-                        pid,
-                        &mut [IoSliceMut::new(elf_hdr.as_bytes_mut())],
-                        &[RemoteIoVec {
-                            base: begin as usize,
-                            len: std::mem::size_of::<Elf64_Ehdr>(),
-                        }],
-                    ) {
+                    match memory_reader.read_process_memory(begin as usize, elf_hdr.as_bytes_mut())
+                    {
                         Ok(_) => Some(elf_hdr),
                         Err(_) => None,
                     }
@@ -776,7 +775,15 @@ impl ProcessView {
             tracing::debug!("Thread state: {:x?}", thread);
         }
 
-        let (va_regions, mapped_files, vdso) = get_va_regions(pid)?;
+        let memory_reader = if process_vm_readv_works() {
+            tracing::info!("Using the fast process memory read on this system");
+            Box::new(FastMemoryReader::new(pid)?) as Box<dyn ReadProcessMemory>
+        } else {
+            tracing::info!("Using the slow process memory read on this system");
+            Box::new(SlowMemoryReader::new(pid)?) as Box<dyn ReadProcessMemory>
+        };
+
+        let (va_regions, mapped_files, vdso) = get_va_regions(pid, memory_reader.as_ref())?;
 
         tracing::debug!("VA regions {:x?}", va_regions);
         tracing::debug!("Mapped files {:x?}", mapped_files);
@@ -801,6 +808,7 @@ impl ProcessView {
             mapped_files,
             aux_vector,
             page_size,
+            memory_reader,
         })
     }
 }
@@ -830,7 +838,7 @@ impl Drop for ProcessView {
 trait ReadProcessMemory {
     /// Read process memory into `buf` starting at the virtual address `base`,
     /// and returns the number of bytes and or the error.
-    fn read_process_memory(&mut self, base: usize, buf: &mut [u8]) -> Result<usize, CoreError>;
+    fn read_process_memory(&self, base: usize, buf: &mut [u8]) -> Result<usize, CoreError>;
 }
 
 /// A fast process memory reader employing the `process_vm_readv` system call
@@ -846,7 +854,7 @@ impl FastMemoryReader {
 }
 
 impl ReadProcessMemory for FastMemoryReader {
-    fn read_process_memory(&mut self, base: usize, buf: &mut [u8]) -> Result<usize, CoreError> {
+    fn read_process_memory(&self, base: usize, buf: &mut [u8]) -> Result<usize, CoreError> {
         let len = buf.len();
         process_vm_readv(
             self.pid,
@@ -860,7 +868,7 @@ impl ReadProcessMemory for FastMemoryReader {
 /// A slow but more compatible process memory reader, uses the `/proc/<pid>/mem`
 /// file.
 struct SlowMemoryReader {
-    file: std::fs::File,
+    file: RefCell<std::fs::File>,
 }
 
 impl SlowMemoryReader {
@@ -869,16 +877,18 @@ impl SlowMemoryReader {
             .read(true)
             .open(format!("/proc/{pid}/mem"))
             .map_err(CoreError::IoError)?;
-        Ok(Self { file })
+        Ok(Self {
+            file: RefCell::new(file),
+        })
     }
 }
 
 impl ReadProcessMemory for SlowMemoryReader {
-    fn read_process_memory(&mut self, base: usize, buf: &mut [u8]) -> Result<usize, CoreError> {
-        self.file
-            .seek(std::io::SeekFrom::Start(base as u64))
+    fn read_process_memory(&self, base: usize, buf: &mut [u8]) -> Result<usize, CoreError> {
+        let mut file = self.file.borrow_mut();
+        file.seek(std::io::SeekFrom::Start(base as u64))
             .map_err(CoreError::IoError)?;
-        self.file.read_exact(buf).map_err(CoreError::IoError)?;
+        file.read_exact(buf).map_err(CoreError::IoError)?;
 
         Ok(buf.len())
     }
@@ -940,14 +950,6 @@ fn write_core_dump_inner<T: Write>(
         nix::unistd::gettid()
     );
 
-    let memory_reader = if process_vm_readv_works() {
-        tracing::info!("Using the fast process memory read on this system");
-        Box::new(FastMemoryReader::new(pv.pid)?) as Box<dyn ReadProcessMemory>
-    } else {
-        tracing::info!("Using the slow process memory read on this system");
-        Box::new(SlowMemoryReader::new(pv.pid)?) as Box<dyn ReadProcessMemory>
-    };
-
     let note_sizes = get_elf_notes_sizes(pv, custom_notes.as_deref())?;
 
     total_written += write_elf_header(&mut writer, pv)?;
@@ -956,7 +958,7 @@ fn write_core_dump_inner<T: Write>(
     total_written += writer.align_position(ELF_HEADER_ALIGN)?;
     total_written += write_elf_notes(&mut writer, pv, &note_sizes, custom_notes)?;
     total_written += writer.align_position(pv.page_size)?;
-    total_written += write_va_regions(&mut writer, pv, memory_reader)?;
+    total_written += write_va_regions(&mut writer, pv)?;
 
     tracing::info!("Wrote {} bytes for ELF core dump", total_written);
 
@@ -1531,7 +1533,6 @@ fn write_va_region<T: Write>(
     writer: &mut ElfCoreWriter<T>,
     va_region: &VaRegion,
     pv: &ProcessView,
-    memory_reader: &mut Box<dyn ReadProcessMemory>,
 ) -> Result<usize, CoreError> {
     let mut dumped = 0_usize;
     let mut address = va_region.begin;
@@ -1539,7 +1540,10 @@ fn write_va_region<T: Write>(
 
     while address < va_region.end {
         let len = std::cmp::min((va_region.end - address) as usize, BUFFER_SIZE);
-        match memory_reader.read_process_memory(address as usize, &mut buffer[..len]) {
+        match pv
+            .memory_reader
+            .read_process_memory(address as usize, &mut buffer[..len])
+        {
             Ok(bytes_read) => {
                 writer.write_all(&buffer[..bytes_read])?;
 
@@ -1581,7 +1585,6 @@ fn write_va_region<T: Write>(
 fn write_va_regions<T: Write>(
     writer: &mut ElfCoreWriter<T>,
     pv: &ProcessView,
-    mut memory_reader: Box<dyn ReadProcessMemory>,
 ) -> Result<usize, CoreError> {
     let mut written = 0_usize;
 
@@ -1591,7 +1594,7 @@ fn write_va_regions<T: Write>(
     );
 
     for va_region in &pv.va_regions {
-        let dumped = write_va_region(writer, va_region, pv, &mut memory_reader)?;
+        let dumped = write_va_region(writer, va_region, pv)?;
 
         written += dumped;
 
