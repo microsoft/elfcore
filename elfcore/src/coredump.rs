@@ -944,7 +944,8 @@ fn write_core_dump_inner<T: Write>(
     let mut writer = ElfCoreWriter::new(writer);
 
     tracing::info!(
-        "Creating core dump file for process {}. This process id: {}, this thread id: {}",
+        "Creating core dump file for {} process {}. This process id: {}, this thread id: {}",
+        arch::name(),
         pv.pid,
         nix::unistd::getpid(),
         nix::unistd::gettid()
@@ -1352,6 +1353,7 @@ fn write_process_status_notes<T: Write>(
         total_written += written;
 
         for arch_component in thread_view.arch_state.components() {
+            tracing::debug!(arch_component = arch_component.name, "Writing arch state");
             written = write_elf_note(
                 writer,
                 arch_component.note_type,
