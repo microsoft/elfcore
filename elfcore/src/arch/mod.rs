@@ -31,7 +31,6 @@ pub trait Arch {
     const EM_ELF_MACHINE: u16;
 
     fn new(pid: Pid) -> Result<Box<Self>, CoreError>;
-    fn name() -> &'static str;
     fn greg_set(&self) -> elf_gregset_t;
     fn components(&self) -> &Vec<ArchComponentState>;
 }
@@ -88,18 +87,6 @@ impl Arch for ArchState {
         }))
     }
 
-    fn name() -> &'static str {
-        #[cfg(target_arch = "x86_64")]
-        {
-            "x86_64"
-        }
-
-        #[cfg(target_arch = "aarch64")]
-        {
-            "aarch64"
-        }
-    }
-
     fn greg_set(&self) -> elf_gregset_t {
         #[cfg(target_arch = "x86_64")]
         {
@@ -114,5 +101,17 @@ impl Arch for ArchState {
 
     fn components(&self) -> &Vec<ArchComponentState> {
         &self.components
+    }
+}
+
+pub fn name() -> &'static str {
+    #[cfg(target_arch = "x86_64")]
+    {
+        "x86_64"
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        "aarch64"
     }
 }
