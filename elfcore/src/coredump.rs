@@ -32,8 +32,9 @@ use std::io::Read;
 use std::io::Seek;
 use std::io::Write;
 use std::slice;
-use zerocopy::AsBytes;
-use zerocopy::FromZeroes;
+use zerocopy::FromZeros;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
 
 const ELF_HEADER_ALIGN: usize = 8;
 const ELF_NOTE_ALIGN: usize = 4;
@@ -91,14 +92,14 @@ where
     }
 }
 
-#[derive(AsBytes)]
+#[derive(IntoBytes, Immutable)]
 #[repr(C, packed)]
 struct MappedFilesNoteIntro {
     file_count: u64,
     page_size: u64,
 }
 
-#[derive(AsBytes)]
+#[derive(IntoBytes, Immutable)]
 #[repr(C, packed)]
 struct MappedFilesNoteItem {
     start_addr: u64,
@@ -437,7 +438,7 @@ fn get_aux_vector(pid: Pid) -> Result<Vec<Elf64_Auxv>, CoreError> {
             a_val: 0,
         };
 
-        match file.read_exact(aux.as_bytes_mut()) {
+        match file.read_exact(aux.as_mut_bytes()) {
             Ok(_) => auxv.push(aux),
             Err(_) => break,
         }
@@ -541,7 +542,7 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
                     let mut elf_hdr = Elf64_Ehdr::new_zeroed();
                     match process_vm_readv(
                         pid,
-                        &mut [IoSliceMut::new(elf_hdr.as_bytes_mut())],
+                        &mut [IoSliceMut::new(elf_hdr.as_mut_bytes())],
                         &[RemoteIoVec {
                             base: begin as usize,
                             len: std::mem::size_of::<Elf64_Ehdr>(),

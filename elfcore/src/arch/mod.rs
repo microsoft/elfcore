@@ -21,6 +21,7 @@ pub use aarch64::elf_gregset_t;
 
 #[derive(Debug)]
 pub struct ArchComponentState {
+    #[allow(unused)]
     pub name: &'static str,
     pub note_type: u32,
     pub note_name: &'static [u8],
@@ -31,6 +32,7 @@ pub trait Arch {
     const EM_ELF_MACHINE: u16;
 
     fn new(pid: Pid) -> Result<Box<Self>, CoreError>;
+    #[allow(unused)]
     fn name() -> &'static str;
     fn greg_set(&self) -> elf_gregset_t;
     fn components(&self) -> &Vec<ArchComponentState>;
