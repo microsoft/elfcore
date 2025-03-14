@@ -9,7 +9,8 @@ use super::ArchComponentState;
 use crate::ptrace::ptrace_get_reg_set;
 use crate::CoreError;
 use nix::unistd::Pid;
-use zerocopy::AsBytes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
 
 // amd64 machine
 pub const EM_X86_64: u16 = 62;
@@ -18,7 +19,7 @@ pub const EM_X86_64: u16 = 62;
 pub const NT_X86_XSTATE: u32 = 0x202;
 
 #[repr(C, packed)]
-#[derive(Clone, Copy, Debug, AsBytes)]
+#[derive(Clone, Copy, Debug, IntoBytes, Immutable)]
 pub struct elf_gregset_t {
     r15: u64,
     r14: u64,

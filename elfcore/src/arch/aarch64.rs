@@ -9,7 +9,8 @@ use super::ArchComponentState;
 use crate::ptrace::ptrace_get_reg_set;
 use crate::CoreError;
 use nix::unistd::Pid;
-use zerocopy::AsBytes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
 
 // aarch64 machine
 pub const EM_AARCH64: u16 = 183;
@@ -21,7 +22,7 @@ pub const NT_ARM_HW_WATCH: u32 = 0x403;
 pub const NT_ARM_SYSTEM_CALL: u32 = 0x404;
 
 #[repr(C, packed)]
-#[derive(Clone, Copy, Debug, AsBytes)]
+#[derive(Clone, Copy, Debug, IntoBytes, Immutable)]
 pub struct elf_gregset_t {
     pub regs: [u64; 31],
     pub sp: u64,
