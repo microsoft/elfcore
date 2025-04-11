@@ -19,31 +19,39 @@ mod aarch64;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::elf_gregset_t;
 
+/// Contains SSE registers on amd64, NEON on arm64,
+/// XSAVE state on amd64, etc
 #[derive(Debug)]
 pub struct ArchComponentState {
+    /// Name
     pub name: &'static str,
+    /// Note type
     pub note_type: u32,
+    /// Note name
     pub note_name: &'static [u8],
+    /// Data
     pub data: Vec<u8>,
 }
 
-pub trait Arch {
+pub(crate) trait Arch {
     const EM_ELF_MACHINE: u16;
 
     fn new(pid: Pid) -> Result<Box<Self>, CoreError>;
+    #[allow(dead_code)]
     fn name() -> &'static str;
     fn greg_set(&self) -> elf_gregset_t;
     fn components(&self) -> &Vec<ArchComponentState>;
 }
 
+/// Describes CPU state
 #[derive(Debug)]
 pub struct ArchState {
-    // GP registers.
-    gpr_state: Vec<u64>,
+    /// GP registers.
+    pub gpr_state: Vec<u64>,
 
-    // Contains SSE registers on amd64, NEON on arm64,
-    // XSAVE state on amd64, etc
-    components: Vec<ArchComponentState>,
+    /// Contains SSE registers on amd64, NEON on arm64,
+    /// XSAVE state on amd64, etc
+    pub components: Vec<ArchComponentState>,
 }
 
 impl Arch for ArchState {

@@ -5,16 +5,10 @@
 //! a linux process.
 
 use crate::CoreError;
+use crate::ReadProcessMemory;
 use nix::sys::uio::{process_vm_readv, RemoteIoVec};
 use nix::unistd::Pid;
 use std::io::{IoSliceMut, Read, Seek};
-
-/// Trait for those able to read the process virtual memory.
-pub(crate) trait ReadProcessMemory {
-    /// Read process memory into `buf` starting at the virtual address `base`,
-    /// and returns the number of bytes and or the error.
-    fn read_process_memory(&mut self, base: usize, buf: &mut [u8]) -> Result<usize, CoreError>;
-}
 
 /// A fast process memory reader employing the `process_vm_readv` system call
 /// available on Linux 3.2+. It might be disabled on some systems in the kernel configuration.

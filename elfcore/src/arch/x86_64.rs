@@ -3,8 +3,6 @@
 
 //! x86_64 specifics for ELF core dump files.
 
-#![cfg(target_arch = "x86_64")]
-
 use super::ArchComponentState;
 use crate::linux::ptrace::ptrace_get_reg_set;
 use crate::CoreError;

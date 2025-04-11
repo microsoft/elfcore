@@ -5,15 +5,16 @@
 //!
 //! Gathering process information.
 
-use crate::arch;
+use super::memory::{FastMemoryReader, SlowMemoryReader};
+use super::ptrace::ptrace_interrupt;
 use crate::arch::Arch;
 use crate::coredump::{MappedFile, MappedFileRegion, VaProtection, VaRegion};
 use crate::elf::{
     Elf64_Auxv, Elf64_Ehdr, EI_MAG0, EI_MAG1, EI_MAG2, EI_MAG3, EI_VERSION, ELFMAG0, ELFMAG1,
     ELFMAG2, ELFMAG3, ET_DYN, ET_EXEC, EV_CURRENT,
 };
-use crate::linux::ptrace::ptrace_interrupt;
 use crate::CoreError;
+use crate::{arch, ProcessInfoSource, ReadProcessMemory};
 use nix::libc::Elf64_Phdr;
 use nix::sys;
 use nix::sys::ptrace::{seize, Options};
@@ -28,100 +29,101 @@ use std::io::{BufRead, IoSliceMut, Read};
 use zerocopy::AsBytes;
 use zerocopy::FromZeroes;
 
-// Linux Light-weight Process
+/// Linux Light-weight Process
 #[derive(Debug)]
-pub(crate) struct ThreadView {
-    // Thread id.
-    pub(crate) tid: Pid,
+pub struct ThreadView {
+    /// Thread id.
+    pub tid: Pid,
 
-    // Command line.
-    pub(crate) cmd_line: String,
+    /// Command line.
+    pub cmd_line: String,
 
-    // The filename of the executable, in parentheses.
-    // This is visible whether or not the executable is
-    // swapped out.
-    pub(crate) comm: String,
+    /// The filename of the executable, in parentheses.
+    /// This is visible whether or not the executable is
+    /// swapped out.
+    pub comm: String,
 
-    // One of the following characters, indicating process
-    // state:
-    //          R  Running
-    //          S  Sleeping in an interruptible wait
-    //          D  Waiting in uninterruptible disk sleep
-    //          Z  Zombie
-    //          T  Stopped (on a signal) or (before Linux 2.6.33)
-    //             trace stopped
-    //          t  Tracing stop (Linux 2.6.33 onward)
-    //          W  Paging (only before Linux 2.6.0)
-    //          X  Dead (from Linux 2.6.0 onward)
-    //          x  Dead (Linux 2.6.33 to 3.13 only)
-    //          K  Wakekill (Linux 2.6.33 to 3.13 only)
-    //          W  Waking (Linux 2.6.33 to 3.13 only)
-    //          P  Parked (Linux 3.9 to 3.13 only)
-    pub(crate) state: u8,
+    /// One of the following characters, indicating process
+    /// state:
+    ///          R  Running
+    ///          S  Sleeping in an interruptible wait
+    ///          D  Waiting in uninterruptible disk sleep
+    ///          Z  Zombie
+    ///          T  Stopped (on a signal) or (before Linux 2.6.33)
+    ///             trace stopped
+    ///          t  Tracing stop (Linux 2.6.33 onward)
+    ///          W  Paging (only before Linux 2.6.0)
+    ///          X  Dead (from Linux 2.6.0 onward)
+    ///          x  Dead (Linux 2.6.33 to 3.13 only)
+    ///          K  Wakekill (Linux 2.6.33 to 3.13 only)
+    ///          W  Waking (Linux 2.6.33 to 3.13 only)
+    ///          P  Parked (Linux 3.9 to 3.13 only)
+    pub state: u8,
 
-    // The PID of the parent of this process.
-    pub(crate) ppid: i32,
+    /// The PID of the parent of this process.
+    pub ppid: i32,
 
-    // The process group ID of the process.
-    pub(crate) pgrp: i32,
+    /// The process group ID of the process.
+    pub pgrp: i32,
 
-    // The session ID of the process.
-    pub(crate) session: i32,
+    /// The session ID of the process.
+    pub session: i32,
 
-    // The kernel flags word of the process.  For bit mean‐
-    // ings, see the PF_* defines in the Linux kernel
-    // source file include/linux/sched.h.  Details depend
-    // on the kernel version.
-    // The format for this field was %lu before Linux 2.6.
-    pub(crate) flags: i32,
+    /// The kernel flags word of the process.  For bit mean‐
+    /// ings, see the PF_* defines in the Linux kernel
+    /// source file include/linux/sched.h.  Details depend
+    /// on the kernel version.
+    /// The format for this field was %lu before Linux 2.6.
+    pub flags: i32,
 
-    // Amount of time that this process has been scheduled
-    // in user mode, measured in clock ticks (divide by
-    // sysconf(_SC_CLK_TCK)).  This includes guest time,
-    // guest_time (time spent running a virtual CPU, see
-    // below), so that applications that are not aware of
-    // the guest time field do not lose that time from
-    // their calculations.
-    pub(crate) utime: u64,
+    /// Amount of time that this process has been scheduled
+    /// in user mode, measured in clock ticks (divide by
+    /// sysconf(_SC_CLK_TCK)).  This includes guest time,
+    /// guest_time (time spent running a virtual CPU, see
+    /// below), so that applications that are not aware of
+    /// the guest time field do not lose that time from
+    /// their calculations.
+    pub utime: u64,
 
-    // Amount of time that this process has been scheduled
-    // in kernel mode, measured in clock ticks (divide by
-    // sysconf(_SC_CLK_TCK)).
-    pub(crate) stime: u64,
+    /// Amount of time that this process has been scheduled
+    /// in kernel mode, measured in clock ticks (divide by
+    /// sysconf(_SC_CLK_TCK)).
+    pub stime: u64,
 
-    // Amount of time that this process's waited-for chil‐
-    // dren have been scheduled in user mode, measured in
-    // clock ticks (divide by sysconf(_SC_CLK_TCK)).  (See
-    // also times(2).)  This includes guest time,
-    // cguest_time (time spent running a virtual CPU, see
-    // below).
-    pub(crate) cutime: u64,
+    /// Amount of time that this process's waited-for chil‐
+    /// dren have been scheduled in user mode, measured in
+    /// clock ticks (divide by sysconf(_SC_CLK_TCK)).  (See
+    /// also times(2).)  This includes guest time,
+    /// cguest_time (time spent running a virtual CPU, see
+    /// below).
+    pub cutime: u64,
 
-    // Amount of time that this process's waited-for chil‐
-    // dren have been scheduled in kernel mode, measured in
-    // clock ticks (divide by sysconf(_SC_CLK_TCK)).
-    pub(crate) cstime: u64,
+    /// Amount of time that this process's waited-for chil‐
+    /// dren have been scheduled in kernel mode, measured in
+    /// clock ticks (divide by sysconf(_SC_CLK_TCK)).
+    pub cstime: u64,
 
-    // The nice value (see setpriority(2)), a value in the
-    // range 19 (low priority) to -20 (high priority).
-    pub(crate) nice: u64,
+    /// The nice value (see setpriority(2)), a value in the
+    /// range 19 (low priority) to -20 (high priority).
+    pub nice: u64,
 
-    // User Id.
-    pub(crate) uid: u64,
+    /// User Id.
+    pub uid: u64,
 
-    // Group Id.
-    pub(crate) gid: u32,
+    /// Group Id.
+    pub gid: u32,
 
-    // Current signal.
-    pub(crate) cursig: u16,
+    /// Current signal.
+    pub cursig: u16,
 
-    // Blocked signal.
-    pub(crate) sighold: u64,
+    /// Blocked signal.
+    pub sighold: u64,
 
-    // Pending signal.
-    pub(crate) sigpend: u64,
+    /// Pending signal.
+    pub sigpend: u64,
 
-    pub(crate) arch_state: Box<arch::ArchState>,
+    /// State of the CPU
+    pub arch_state: Box<arch::ArchState>,
 }
 
 impl ThreadView {
@@ -597,6 +599,40 @@ impl ProcessView {
             aux_vector,
             page_size,
         })
+    }
+
+    /// Retrieves the memory reader for access to memory regions
+    pub(crate) fn create_memory_reader(pid: Pid) -> Result<Box<dyn ReadProcessMemory>, CoreError> {
+        let memory_reader = if process_vm_readv_works() {
+            tracing::info!("Using the fast process memory read on this system");
+            Box::new(FastMemoryReader::new(pid)?) as Box<dyn ReadProcessMemory>
+        } else {
+            tracing::info!("Using the slow process memory read on this system");
+            Box::new(SlowMemoryReader::new(pid)?) as Box<dyn ReadProcessMemory>
+        };
+
+        Ok(memory_reader)
+    }
+}
+
+impl ProcessInfoSource for ProcessView {
+    fn pid(&self) -> Pid {
+        self.pid
+    }
+    fn threads(&self) -> &[ThreadView] {
+        &self.threads
+    }
+    fn va_regions(&self) -> &[VaRegion] {
+        &self.va_regions
+    }
+    fn mapped_files(&self) -> Option<&[MappedFile]> {
+        Some(&self.mapped_files)
+    }
+    fn aux_vector(&self) -> Option<&[Elf64_Auxv]> {
+        Some(&self.aux_vector)
+    }
+    fn page_size(&self) -> usize {
+        self.page_size
     }
 }
 

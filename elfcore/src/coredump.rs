@@ -9,12 +9,10 @@
 use super::arch;
 use super::arch::Arch;
 use crate::elf::*;
-use crate::linux::memory::FastMemoryReader;
-use crate::linux::memory::ReadProcessMemory;
-use crate::linux::memory::SlowMemoryReader;
-use crate::linux::process::process_vm_readv_works;
 use crate::CoreError;
+use crate::ProcessInfoSource;
 use crate::ProcessView;
+use crate::ReadProcessMemory;
 use nix::libc::Elf64_Phdr;
 use smallvec::smallvec;
 use smallvec::SmallVec;
@@ -94,37 +92,52 @@ struct MappedFilesNoteItem {
     page_count: u64,
 }
 
+/// Struct that describes a region's access permissions
 #[derive(Debug)]
-#[allow(dead_code)]
-pub(crate) struct VaProtection {
-    pub(crate) is_private: bool,
-    pub(crate) read: bool,
-    pub(crate) write: bool,
-    pub(crate) execute: bool,
+pub struct VaProtection {
+    /// Field that indicates this is a private region
+    pub is_private: bool,
+    /// Read permissions
+    pub read: bool,
+    /// Write permissions
+    pub write: bool,
+    /// Execute permissions
+    pub execute: bool,
 }
 
+/// Struct that describes a memory region
 #[derive(Debug)]
-#[allow(dead_code)]
-pub(crate) struct VaRegion {
-    pub(crate) begin: u64,
-    pub(crate) end: u64,
-    pub(crate) offset: u64,
-    pub(crate) protection: VaProtection,
-    pub(crate) mapped_file_name: Option<String>,
+pub struct VaRegion {
+    /// Virtual address start
+    pub begin: u64,
+    /// Virtual address end
+    pub end: u64,
+    /// Offset in memory where the region resides
+    pub offset: u64,
+    /// Access permissions
+    pub protection: VaProtection,
+    /// Mapped file name
+    pub mapped_file_name: Option<String>,
 }
 
+/// Type that describes a mapped file region
 #[derive(Debug)]
-#[allow(dead_code)]
-pub(crate) struct MappedFileRegion {
-    pub(crate) begin: u64,
-    pub(crate) end: u64,
-    pub(crate) offset: u64,
+pub struct MappedFileRegion {
+    /// Virtual address start
+    pub begin: u64,
+    /// Virtual address end
+    pub end: u64,
+    /// Offset in memory where the region resides
+    pub offset: u64,
 }
 
+/// Type that describes a mapped file
 #[derive(Debug)]
-pub(crate) struct MappedFile {
-    pub(crate) name: String,
-    pub(crate) regions: Vec<MappedFileRegion>,
+pub struct MappedFile {
+    /// File name
+    pub name: String,
+    /// File regions
+    pub regions: Vec<MappedFileRegion>,
 }
 
 #[derive(Default)]
@@ -149,7 +162,7 @@ struct CustomFileNote<'a> {
 }
 
 fn get_elf_notes_sizes(
-    pv: &ProcessView,
+    pv: &dyn ProcessInfoSource,
     custom_notes: Option<&[CustomFileNote<'_>]>,
 ) -> Result<NoteSizes, CoreError> {
     let header_and_name =
@@ -163,7 +176,7 @@ fn get_elf_notes_sizes(
             std::mem::size_of::<prstatus_t>() + {
                 let mut arch_size = 0;
                 for component in pv
-                    .threads
+                    .threads()
                     .first()
                     .ok_or(CoreError::ProcParsingError)?
                     .arch_state
@@ -175,23 +188,31 @@ fn get_elf_notes_sizes(
             },
             ELF_NOTE_ALIGN,
         );
-    let process_status = one_thread_status * pv.threads.len();
-    let aux_vector = header_and_name + pv.aux_vector.len() * std::mem::size_of::<Elf64_Auxv>();
+    let process_status = one_thread_status * pv.threads().len();
+    // Calculate auxv size - do not count if no auxv
+    let aux_vector = pv
+        .aux_vector()
+        .map(|auxv| header_and_name + std::mem::size_of_val(auxv))
+        .unwrap_or(0);
 
-    let mapped_files = {
-        let mut addr_layout_size = 0_usize;
-        let mut string_size = 0_usize;
+    // Calculate mapped files size - do not count if no mapped files
+    let mapped_files = pv
+        .mapped_files()
+        .map(|files| {
+            let mut addr_layout_size = 0_usize;
+            let mut string_size = 0_usize;
 
-        for mapped_file in &pv.mapped_files {
-            string_size += (mapped_file.name.len() + 1) * mapped_file.regions.len();
-            addr_layout_size +=
-                std::mem::size_of::<MappedFilesNoteItem>() * mapped_file.regions.len();
-        }
+            for mapped_file in files {
+                string_size += (mapped_file.name.len() + 1) * mapped_file.regions.len();
+                addr_layout_size +=
+                    std::mem::size_of::<MappedFilesNoteItem>() * mapped_file.regions.len();
+            }
 
-        let intro_size = std::mem::size_of::<MappedFilesNoteIntro>();
+            let intro_size = std::mem::size_of::<MappedFilesNoteIntro>();
 
-        header_and_name + round_up(intro_size + addr_layout_size + string_size, ELF_NOTE_ALIGN)
-    };
+            header_and_name + round_up(intro_size + addr_layout_size + string_size, ELF_NOTE_ALIGN)
+        })
+        .unwrap_or(0);
 
     let custom = if let Some(custom_notes) = custom_notes {
         round_up(
@@ -229,31 +250,25 @@ fn get_elf_notes_sizes(
 ///
 /// To access new functionality, use [`CoreDumpBuilder`]
 pub fn write_core_dump<T: Write>(writer: T, pv: &ProcessView) -> Result<usize, CoreError> {
-    write_core_dump_inner(writer, pv, None)
+    let memory_reader = ProcessView::create_memory_reader(pv.pid)?;
+    write_core_dump_inner(writer, pv, None, memory_reader)
 }
 
 fn write_core_dump_inner<T: Write>(
     writer: T,
-    pv: &ProcessView,
+    pv: &dyn ProcessInfoSource,
     custom_notes: Option<&mut [CustomFileNote<'_>]>,
+    memory_reader: Box<dyn ReadProcessMemory>,
 ) -> Result<usize, CoreError> {
     let mut total_written = 0_usize;
     let mut writer = ElfCoreWriter::new(writer);
 
     tracing::info!(
         "Creating core dump file for process {}. This process id: {}, this thread id: {}",
-        pv.pid,
+        pv.pid(),
         nix::unistd::getpid(),
         nix::unistd::gettid()
     );
-
-    let memory_reader = if process_vm_readv_works() {
-        tracing::info!("Using the fast process memory read on this system");
-        Box::new(FastMemoryReader::new(pv.pid)?) as Box<dyn ReadProcessMemory>
-    } else {
-        tracing::info!("Using the slow process memory read on this system");
-        Box::new(SlowMemoryReader::new(pv.pid)?) as Box<dyn ReadProcessMemory>
-    };
 
     let note_sizes = get_elf_notes_sizes(pv, custom_notes.as_deref())?;
 
@@ -262,7 +277,7 @@ fn write_core_dump_inner<T: Write>(
     total_written += write_program_headers(&mut writer, pv, &note_sizes)?;
     total_written += writer.align_position(ELF_HEADER_ALIGN)?;
     total_written += write_elf_notes(&mut writer, pv, &note_sizes, custom_notes)?;
-    total_written += writer.align_position(pv.page_size)?;
+    total_written += writer.align_position(pv.page_size())?;
     total_written += write_va_regions(&mut writer, pv, memory_reader)?;
 
     tracing::info!("Wrote {} bytes for ELF core dump", total_written);
@@ -286,7 +301,7 @@ fn round_up(value: usize, alignment: usize) -> usize {
 
 fn write_elf_header<T: Write>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &ProcessView,
+    pv: &dyn ProcessInfoSource,
 ) -> Result<usize, CoreError> {
     let mut e_ident = [0_u8; 16];
     e_ident[EI_MAG0] = ELFMAG0;
@@ -306,7 +321,7 @@ fn write_elf_header<T: Write>(
         e_phoff: std::mem::size_of::<Elf64_Ehdr>() as u64,
         e_ehsize: std::mem::size_of::<Elf64_Ehdr>() as u16,
         e_phentsize: std::mem::size_of::<Elf64_Phdr>() as u16,
-        e_phnum: 1 + pv.va_regions.len() as u16, // PT_NOTE and VA regions
+        e_phnum: 1 + pv.va_regions().len() as u16, // PT_NOTE and VA regions
         e_shentsize: 0,
         e_entry: 0,
         e_shoff: 0,
@@ -337,7 +352,7 @@ fn write_elf_header<T: Write>(
 
 fn write_program_headers<T: Write>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &ProcessView,
+    pv: &dyn ProcessInfoSource,
     note_sizes: &NoteSizes,
 ) -> Result<usize, CoreError> {
     tracing::info!(
@@ -351,7 +366,7 @@ fn write_program_headers<T: Write>(
     // as many PT_LOAD as there are VA regions.
     // Notes are situated right after the headers.
 
-    let phdr_size = std::mem::size_of::<Elf64_Phdr>() * (pv.va_regions.len() + 1);
+    let phdr_size = std::mem::size_of::<Elf64_Phdr>() * (pv.va_regions().len() + 1);
     let ehdr_size = std::mem::size_of::<Elf64_Ehdr>();
     let data_offset = round_up(ehdr_size, ELF_HEADER_ALIGN) + round_up(phdr_size, ELF_HEADER_ALIGN);
 
@@ -379,9 +394,9 @@ fn write_program_headers<T: Write>(
         written += slice.len();
     }
 
-    let mut current_offset = round_up(data_offset + note_sizes.total_note_size, pv.page_size);
+    let mut current_offset = round_up(data_offset + note_sizes.total_note_size, pv.page_size());
 
-    for region in &pv.va_regions {
+    for region in pv.va_regions() {
         let mut seg_header = Elf64_Phdr {
             p_type: PT_LOAD,
             p_flags: {
@@ -407,7 +422,7 @@ fn write_program_headers<T: Write>(
             p_paddr: 0,
             p_filesz: region.end - region.begin,
             p_memsz: region.end - region.begin,
-            p_align: pv.page_size as u64,
+            p_align: pv.page_size() as u64,
         };
 
         // SAFETY: Elf64_Phdr is repr(C) with no padding bytes,
@@ -534,7 +549,7 @@ fn write_elf_note_file<T: Write>(
 
 fn write_process_info_note<T: Write>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &ProcessView,
+    pv: &dyn ProcessInfoSource,
 ) -> Result<usize, CoreError> {
     let mut written = 0_usize;
 
@@ -546,8 +561,8 @@ fn write_process_info_note<T: Write>(
     // Threads and processes in Linux are LWP (Light-weight processes)
     // TODO That's O(N) at worst, does that hurt?
 
-    for thread_view in &pv.threads {
-        if thread_view.tid == pv.pid {
+    for thread_view in pv.threads() {
+        if thread_view.tid == pv.pid() {
             let pr_info = prpsinfo_t {
                 pr_state: thread_view.state,
                 pr_sname: thread_view.state,
@@ -602,7 +617,7 @@ fn write_process_info_note<T: Write>(
 
 fn write_process_status_notes<T: Write>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &ProcessView,
+    pv: &dyn ProcessInfoSource,
 ) -> Result<usize, CoreError> {
     let mut total_written = 0_usize;
 
@@ -611,7 +626,7 @@ fn write_process_status_notes<T: Write>(
         writer.stream_position()?
     );
 
-    for thread_view in &pv.threads {
+    for thread_view in pv.threads() {
         let status = prstatus_t {
             si_signo: thread_view.cursig as u32,
             si_code: 0,
@@ -673,7 +688,7 @@ fn write_process_status_notes<T: Write>(
     tracing::info!(
         "Wrote {} bytes for the thread status notes, {} notes",
         total_written,
-        pv.threads.len()
+        pv.threads().len()
     );
 
     Ok(total_written)
@@ -681,14 +696,17 @@ fn write_process_status_notes<T: Write>(
 
 fn write_aux_vector_note<T: Write>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &ProcessView,
+    pv: &dyn ProcessInfoSource,
 ) -> Result<usize, CoreError> {
     tracing::info!(
         "Writing auxiliary vector at offset {}...",
         writer.stream_position()?
     );
 
-    let written = write_elf_note(writer, NT_AUXV, NOTE_NAME_CORE, pv.aux_vector.as_bytes())?;
+    let written = pv
+        .aux_vector()
+        .map(|auxv| write_elf_note(writer, NT_AUXV, NOTE_NAME_CORE, auxv.as_bytes()))
+        .unwrap_or(Ok(0))?;
 
     tracing::info!("Wrote {} bytes for the auxiliary vector", written);
 
@@ -697,47 +715,52 @@ fn write_aux_vector_note<T: Write>(
 
 fn write_mapped_files_note<T: Write>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &ProcessView,
+    pv: &dyn ProcessInfoSource,
 ) -> Result<usize, CoreError> {
     tracing::info!(
         "Writing mapped files note at offset {}...",
         writer.stream_position()?
     );
 
-    let mut data: Vec<u8> = Vec::with_capacity(pv.page_size);
+    let written = pv
+        .mapped_files()
+        .map(|files| {
+            let mut data: Vec<u8> = Vec::with_capacity(pv.page_size());
 
-    let mut intro = MappedFilesNoteIntro {
-        file_count: 0,
-        page_size: 1,
-    };
-
-    for mapped_file in &pv.mapped_files {
-        intro.file_count += mapped_file.regions.len() as u64;
-    }
-
-    data.extend_from_slice(intro.as_bytes());
-
-    // TODO: Sort by virtual address? Ranges always appear sorted in proc/maps
-
-    for mapped_file in &pv.mapped_files {
-        for region in &mapped_file.regions {
-            let item = MappedFilesNoteItem {
-                start_addr: region.begin,
-                end_addr: region.end,
-                page_count: region.offset, // No scaling
+            let mut intro = MappedFilesNoteIntro {
+                file_count: 0,
+                page_size: 1,
             };
-            data.extend_from_slice(item.as_bytes());
-        }
-    }
 
-    for mapped_file in &pv.mapped_files {
-        for _ in &mapped_file.regions {
-            data.extend_from_slice(mapped_file.name.as_bytes());
-            data.push(0_u8);
-        }
-    }
+            for mapped_file in files {
+                intro.file_count += mapped_file.regions.len() as u64;
+            }
 
-    let written = write_elf_note(writer, NT_FILE, NOTE_NAME_CORE, data.as_bytes())?;
+            data.extend_from_slice(intro.as_bytes());
+
+            // TODO: Sort by virtual address? Ranges always appear sorted in proc/maps
+
+            for mapped_file in files {
+                for region in &mapped_file.regions {
+                    let item = MappedFilesNoteItem {
+                        start_addr: region.begin,
+                        end_addr: region.end,
+                        page_count: region.offset, // No scaling
+                    };
+                    data.extend_from_slice(item.as_bytes());
+                }
+            }
+
+            for mapped_file in files {
+                for _ in &mapped_file.regions {
+                    data.extend_from_slice(mapped_file.name.as_bytes());
+                    data.push(0_u8);
+                }
+            }
+
+            write_elf_note(writer, NT_FILE, NOTE_NAME_CORE, data.as_bytes())
+        })
+        .unwrap_or(Ok(0))?;
 
     tracing::info!("Wrote {} bytes for mapped files note", written);
 
@@ -774,7 +797,7 @@ fn write_custom_notes<T: Write>(
 
 fn write_elf_notes<T: Write>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &ProcessView,
+    pv: &dyn ProcessInfoSource,
     note_sizes: &NoteSizes,
     custom_notes: Option<&mut [CustomFileNote<'_>]>,
 ) -> Result<usize, CoreError> {
@@ -837,7 +860,7 @@ fn write_elf_notes<T: Write>(
 fn write_va_region<T: Write>(
     writer: &mut ElfCoreWriter<T>,
     va_region: &VaRegion,
-    pv: &ProcessView,
+    pv: &dyn ProcessInfoSource,
     memory_reader: &mut Box<dyn ReadProcessMemory>,
 ) -> Result<usize, CoreError> {
     let mut dumped = 0_usize;
@@ -863,12 +886,12 @@ fn write_va_region<T: Write>(
 
                 // Page size is a power of two on modern platforms.
                 debug_assert!(
-                    pv.page_size.is_power_of_two(),
+                    pv.page_size().is_power_of_two(),
                     "Page size is expected to be a power of two"
                 );
 
                 // Round up with bit twiddling as the page size is a power of two.
-                let next_address = (pv.page_size + address as usize) & !(pv.page_size - 1);
+                let next_address = (pv.page_size() + address as usize) & !(pv.page_size() - 1);
                 let next_address = std::cmp::min(next_address, va_region.end as usize);
                 let dummy_data_size = next_address - address as usize;
 
@@ -887,7 +910,7 @@ fn write_va_region<T: Write>(
 
 fn write_va_regions<T: Write>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &ProcessView,
+    pv: &dyn ProcessInfoSource,
     mut memory_reader: Box<dyn ReadProcessMemory>,
 ) -> Result<usize, CoreError> {
     let mut written = 0_usize;
@@ -897,7 +920,7 @@ fn write_va_regions<T: Write>(
         writer.stream_position()?
     );
 
-    for va_region in &pv.va_regions {
+    for va_region in pv.va_regions() {
         let dumped = write_va_region(writer, va_region, pv, &mut memory_reader)?;
 
         written += dumped;
@@ -917,21 +940,39 @@ fn write_va_regions<T: Write>(
     Ok(written)
 }
 
-/// A builder for generating a core dump of a process by pid,
+/// A builder for generating a core dump of a process
 /// optionally with custom notes with content from files
+/// This also supports generating core dumps with information
+/// from a custom source.
 pub struct CoreDumpBuilder<'a> {
-    pv: ProcessView,
+    pv: Box<dyn ProcessInfoSource>,
     custom_notes: Vec<CustomFileNote<'a>>,
+    memory_reader: Box<dyn ReadProcessMemory>,
 }
 
 impl<'a> CoreDumpBuilder<'a> {
     /// Create a new core dump builder for the process with the provided PID
     pub fn new(pid: libc::pid_t) -> Result<Self, CoreError> {
         let pv = ProcessView::new(pid)?;
+        let memory_reader = ProcessView::create_memory_reader(pv.pid)?;
+
         Ok(Self {
-            pv,
+            pv: Box::new(pv) as Box<dyn ProcessInfoSource>,
             custom_notes: Vec::new(),
+            memory_reader,
         })
+    }
+
+    /// Create a new core dump builder from a custom `ProcessInfoSource`
+    pub fn from_source(
+        source: Box<dyn ProcessInfoSource>,
+        memory_reader: Box<dyn ReadProcessMemory>,
+    ) -> CoreDumpBuilder<'a> {
+        CoreDumpBuilder {
+            pv: source,
+            custom_notes: Vec::new(),
+            memory_reader,
+        }
     }
 
     /// Add the contents of a file as a custom note to the core dump
@@ -954,6 +995,11 @@ impl<'a> CoreDumpBuilder<'a> {
     /// # Agruments:
     /// * `writer` - a `std::io::Write` the data is sent to.
     pub fn write<T: Write>(mut self, writer: T) -> Result<usize, CoreError> {
-        write_core_dump_inner(writer, &self.pv, Some(&mut self.custom_notes))
+        write_core_dump_inner(
+            writer,
+            self.pv.as_ref(),
+            Some(&mut self.custom_notes),
+            self.memory_reader,
+        )
     }
 }

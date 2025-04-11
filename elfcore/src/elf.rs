@@ -132,7 +132,9 @@ pub struct prstatus_t {
 #[derive(AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Elf64_Auxv {
+    /// AUXV type
     pub a_type: u64, // from auxvec.h
+    /// AUXV value
     pub a_val: u64,
 }
 
