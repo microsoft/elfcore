@@ -15,5 +15,5 @@ mod ptrace;
 
 pub use coredump::write_core_dump;
 pub use coredump::CoreDumpBuilder;
-pub use coredump::ProcessView;
 pub use error::CoreError;
+pub use linux::process::ProcessView;

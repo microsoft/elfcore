@@ -9,32 +9,19 @@
 use super::arch;
 use super::arch::Arch;
 use crate::elf::*;
-use crate::linux::process::ThreadView;
-use crate::ptrace::ptrace_interrupt;
+use crate::linux::memory::FastMemoryReader;
+use crate::linux::memory::ReadProcessMemory;
+use crate::linux::memory::SlowMemoryReader;
+use crate::linux::process::process_vm_readv_works;
 use crate::CoreError;
+use crate::ProcessView;
 use nix::libc::Elf64_Phdr;
-use nix::sys;
-use nix::sys::ptrace::seize;
-use nix::sys::ptrace::Options;
-use nix::sys::uio::process_vm_readv;
-use nix::sys::uio::RemoteIoVec;
-use nix::sys::wait::waitpid;
-use nix::unistd::sysconf;
-use nix::unistd::Pid;
-use nix::unistd::SysconfVar;
 use smallvec::smallvec;
 use smallvec::SmallVec;
-use std::collections::HashSet;
-use std::fs;
-use std::fs::File;
-use std::io::BufRead;
-use std::io::IoSliceMut;
 use std::io::Read;
-use std::io::Seek;
 use std::io::Write;
 use std::slice;
 use zerocopy::AsBytes;
-use zerocopy::FromZeroes;
 
 const ELF_HEADER_ALIGN: usize = 8;
 const ELF_NOTE_ALIGN: usize = 4;
@@ -109,35 +96,35 @@ struct MappedFilesNoteItem {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-struct VaProtection {
-    is_private: bool,
-    read: bool,
-    write: bool,
-    execute: bool,
+pub(crate) struct VaProtection {
+    pub(crate) is_private: bool,
+    pub(crate) read: bool,
+    pub(crate) write: bool,
+    pub(crate) execute: bool,
 }
 
 #[derive(Debug)]
 #[allow(dead_code)]
-struct VaRegion {
-    begin: u64,
-    end: u64,
-    offset: u64,
-    protection: VaProtection,
-    mapped_file_name: Option<String>,
+pub(crate) struct VaRegion {
+    pub(crate) begin: u64,
+    pub(crate) end: u64,
+    pub(crate) offset: u64,
+    pub(crate) protection: VaProtection,
+    pub(crate) mapped_file_name: Option<String>,
 }
 
 #[derive(Debug)]
 #[allow(dead_code)]
-struct MappedFileRegion {
-    begin: u64,
-    end: u64,
-    offset: u64,
+pub(crate) struct MappedFileRegion {
+    pub(crate) begin: u64,
+    pub(crate) end: u64,
+    pub(crate) offset: u64,
 }
 
 #[derive(Debug)]
-struct MappedFile {
-    name: String,
-    regions: Vec<MappedFileRegion>,
+pub(crate) struct MappedFile {
+    pub(crate) name: String,
+    pub(crate) regions: Vec<MappedFileRegion>,
 }
 
 #[derive(Default)]
@@ -150,18 +137,6 @@ struct NoteSizes {
     total_note_size: usize,
 }
 
-/// View of a Linux light-weight process
-pub struct ProcessView {
-    pid: Pid,
-    threads: Vec<ThreadView>,
-    va_regions: Vec<VaRegion>,
-    mapped_files: Vec<MappedFile>,
-    // Auxiliary vector types.
-    // The kernel exposes some system configuration using it.
-    aux_vector: Vec<Elf64_Auxv>,
-    page_size: usize,
-}
-
 /// Information about a custom note that will be created from a file
 struct CustomFileNote<'a> {
     /// Name used in the ELF note header
@@ -171,251 +146,6 @@ struct CustomFileNote<'a> {
     /// Fixed size of the note, including header, name, data, and size
     /// File contents will be padded or truncated to fit.
     pub note_len: usize,
-}
-
-fn get_thread_ids(pid: Pid) -> Result<Vec<Pid>, CoreError> {
-    let mut threads = Vec::new();
-    let task_dir = format!("/proc/{}/task", pid);
-    tracing::debug!("Reading {task_dir}");
-    let paths = std::fs::read_dir(task_dir)?;
-
-    tracing::debug!(
-        "Enumerating threads(light-weight processes) for the process {}",
-        pid
-    );
-
-    for entry in paths {
-        let entry = entry?;
-        let path = entry.path();
-
-        let metadata = std::fs::metadata(&path)?;
-        if metadata.is_dir() {
-            let stem = path.file_stem();
-            if let Some(stem) = stem {
-                if stem != "." && stem != ".." {
-                    let stem = stem.to_string_lossy();
-                    let tid = Pid::from_raw(stem.parse::<u32>()? as nix::libc::pid_t);
-
-                    tracing::debug!("Found thread {}", tid);
-
-                    threads.push(tid)
-                }
-            }
-        }
-    }
-
-    Ok(threads)
-}
-
-fn get_aux_vector(pid: Pid) -> Result<Vec<Elf64_Auxv>, CoreError> {
-    let mut auxv: Vec<Elf64_Auxv> = Vec::new();
-
-    let auxv_file_name = format!("/proc/{}/auxv", pid);
-    tracing::debug!("Reading {auxv_file_name}");
-    let mut file = File::open(auxv_file_name)?;
-
-    loop {
-        let mut aux = Elf64_Auxv {
-            a_type: 0,
-            a_val: 0,
-        };
-
-        match file.read_exact(aux.as_bytes_mut()) {
-            Ok(_) => auxv.push(aux),
-            Err(_) => break,
-        }
-    }
-
-    Ok(auxv)
-}
-
-fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), CoreError> {
-    let mut maps: Vec<VaRegion> = Vec::new();
-    let mut vdso = 0_u64;
-
-    let mut mapped_elfs: HashSet<String> = HashSet::new();
-    let mut mapped_non_elfs: HashSet<String> = HashSet::new();
-    let mut mapped_files: Vec<MappedFile> = Vec::new();
-
-    let maps_path = format!("/proc/{}/maps", pid);
-    tracing::debug!("Reading {maps_path}");
-    let maps_file = fs::File::open(maps_path)?;
-    let reader = std::io::BufReader::new(maps_file);
-
-    for line in reader.lines() {
-        let line = line?;
-        let parts: Vec<&str> = line.split_whitespace().collect();
-
-        tracing::debug!("Memory maps: {:?}", parts);
-
-        let begin_end: Vec<&str> = parts[0].split('-').collect();
-        let begin = u64::from_str_radix(begin_end[0], 16)?;
-        let end = u64::from_str_radix(begin_end[1], 16)?;
-        let offset = u64::from_str_radix(parts[2], 16)?;
-
-        let mapped_file_name = {
-            let last = *parts.last().ok_or(CoreError::ProcParsingError)?;
-            if last == "[vdso]" {
-                vdso = begin;
-
-                //None
-                tracing::info!("Skipping VA range mapped to {}", last);
-                continue;
-            } else if last == "[vvar]" || last == "[vsyscall]" {
-                //None
-                tracing::info!("Skipping VA range mapped to {}", last);
-                continue;
-            } else if last.starts_with('/') {
-                if last.starts_with("/dev/") {
-                    // Reading device memory might have unintended side effects.
-                    // Always skip.
-                    tracing::info!("Skipping VA range mapped to device file {}", last);
-                    continue;
-                }
-
-                Some(String::from(last))
-            } else {
-                None
-            }
-        };
-
-        let is_private = parts[1].chars().nth(3).ok_or(CoreError::ProcParsingError)? == 'p';
-        let is_shared = parts[1].chars().nth(3).ok_or(CoreError::ProcParsingError)? == 's';
-
-        if !is_private && !is_shared {
-            tracing::info!(
-                "Skipping non-accessible VA range [0x{:x}; 0x{:x}]",
-                begin,
-                end
-            );
-            continue;
-        }
-
-        let protection = VaProtection {
-            read: parts[1].starts_with('r'),
-            write: parts[1].chars().nth(1).ok_or(CoreError::ProcParsingError)? == 'w',
-            execute: parts[1].chars().nth(2).ok_or(CoreError::ProcParsingError)? == 'x',
-            is_private,
-        };
-
-        if !protection.read && !protection.write && !protection.execute {
-            tracing::info!(
-                "Skipping non-accessible VA range [0x{:x}; 0x{:x}]",
-                begin,
-                end
-            );
-            continue;
-        }
-
-        // TODO also can skip over read-only regions and executable regions.
-        // These can be loaded from shared objects available on the system.
-
-        // Was that file seen before and is that an ELF one?
-        if let Some(ref mapped_file_name) = mapped_file_name {
-            if !mapped_elfs.contains(mapped_file_name)
-                && !mapped_non_elfs.contains(mapped_file_name)
-            {
-                // First time for that file.
-                // See if the mapped file is an ELF one, otherwise skip over it
-                // as it might be quite huge and may contains secrets, filter out by default.
-                // TODO: make optional.
-
-                let maybe_elf_hdr: Option<Elf64_Ehdr> = {
-                    let mut elf_hdr = Elf64_Ehdr::new_zeroed();
-                    match process_vm_readv(
-                        pid,
-                        &mut [IoSliceMut::new(elf_hdr.as_bytes_mut())],
-                        &[RemoteIoVec {
-                            base: begin as usize,
-                            len: std::mem::size_of::<Elf64_Ehdr>(),
-                        }],
-                    ) {
-                        Ok(_) => Some(elf_hdr),
-                        Err(_) => None,
-                    }
-                };
-
-                if let Some(elf_hdr) = maybe_elf_hdr {
-                    if elf_hdr.e_ident[EI_MAG0] == ELFMAG0
-                        && elf_hdr.e_ident[EI_MAG1] == ELFMAG1
-                        && elf_hdr.e_ident[EI_MAG2] == ELFMAG2
-                        && elf_hdr.e_ident[EI_MAG3] == ELFMAG3
-                        && elf_hdr.e_ident[EI_VERSION] == EV_CURRENT
-                        && elf_hdr.e_ehsize == std::mem::size_of::<Elf64_Ehdr>() as u16
-                        && (elf_hdr.e_type == ET_EXEC || elf_hdr.e_type == ET_DYN)
-                        && elf_hdr.e_phentsize == std::mem::size_of::<Elf64_Phdr>() as u16
-                        && elf_hdr.e_machine == arch::ArchState::EM_ELF_MACHINE
-                    {
-                        mapped_elfs.insert(mapped_file_name.clone());
-                    } else {
-                        mapped_non_elfs.insert(mapped_file_name.clone());
-                    }
-                }
-            }
-
-            if mapped_non_elfs.contains(mapped_file_name) {
-                tracing::info!(
-                    "Skipping VA range mapped to a non-ELF file {}",
-                    mapped_file_name
-                );
-                continue;
-            } else {
-                tracing::info!(
-                    "Adding VA range [0x{:x}; 0x{:x}] mapped to an ELF file {}",
-                    begin,
-                    end,
-                    mapped_file_name
-                );
-            }
-        }
-
-        // Account for the mapped files regions, not concerning
-        // VA protection.
-
-        if let Some(mapped_file_name) = &mapped_file_name {
-            if mapped_files.is_empty() {
-                mapped_files.push(MappedFile {
-                    name: mapped_file_name.clone(),
-                    regions: vec![MappedFileRegion { begin, end, offset }],
-                })
-            } else {
-                let last_file = mapped_files.last_mut().ok_or(CoreError::ProcParsingError)?;
-                if last_file.name != *mapped_file_name {
-                    mapped_files.push(MappedFile {
-                        name: mapped_file_name.clone(),
-                        regions: vec![MappedFileRegion { begin, end, offset }],
-                    })
-                } else {
-                    let last_region = last_file
-                        .regions
-                        .last_mut()
-                        .ok_or(CoreError::ProcParsingError)?;
-
-                    if last_region.end != begin {
-                        last_file
-                            .regions
-                            .push(MappedFileRegion { begin, end, offset })
-                    } else {
-                        last_region.end = end
-                    }
-                }
-            }
-        }
-
-        // Going to save that VA region into the core dump file
-
-        maps.push(VaRegion {
-            begin,
-            end,
-            offset,
-            protection,
-            mapped_file_name,
-        });
-    }
-
-    maps.sort_by_key(|x| x.begin);
-
-    Ok((maps, mapped_files, vdso))
 }
 
 fn get_elf_notes_sizes(
@@ -489,212 +219,6 @@ fn get_elf_notes_sizes(
         custom,
         total_note_size,
     })
-}
-
-impl ProcessView {
-    /// Creates new process view
-    ///
-    /// # Arguments
-    /// * `pid` - process ID
-    ///
-    pub fn new(pid: libc::pid_t) -> Result<Self, CoreError> {
-        let pid = nix::unistd::Pid::from_raw(pid);
-
-        let mut tids = get_thread_ids(pid)?;
-        tids.sort();
-
-        // Guard against calling for itself. Fail early as the seizing the threads
-        // will fail with -EPERM later.
-        if tids.binary_search(&nix::unistd::getpid()).is_ok() {
-            return Err(CoreError::CantDumpItself);
-        };
-
-        tracing::info!("Attaching to {} threads of process {}", tids.len(), pid);
-
-        for tid in &tids {
-            tracing::debug!("Seizing thread {}", *tid);
-
-            if let Err(e) = seize(*tid, Options::empty()) {
-                tracing::error!("Seizing thread {} failed, error {}", *tid, e);
-                return Err(CoreError::NixError(e));
-            }
-
-            tracing::debug!("Interrupting thread {}", *tid);
-
-            ptrace_interrupt(*tid)?;
-
-            tracing::debug!("Waiting for thread {} to stop", *tid);
-
-            match waitpid(*tid, None) {
-                Ok(s) => {
-                    tracing::debug!("Thread {} stopped, status {:?}", *tid, s);
-                }
-                Err(e) => {
-                    tracing::error!("Waiting for thread {} failed, error {}", *tid, e);
-                    return Err(CoreError::NixError(e));
-                }
-            }
-        }
-
-        // There is a race here:
-        //  1) us stopping threads,
-        //  2) the process that might be creating new ones,
-        //  3) the existing threads might exit.
-        // See if the threads ids are still the same. Not bullet-proof as thread ids
-        // might be re-used.
-        {
-            let mut tids_check = get_thread_ids(pid)?;
-            tids_check.sort();
-
-            if tids != tids_check {
-                return Err(CoreError::RaceTryAgain);
-            }
-        }
-
-        let threads = tids
-            .iter()
-            .map(|tid| ThreadView::new(pid, *tid))
-            .collect::<Result<_, _>>()?;
-        for thread in &threads {
-            tracing::debug!("Thread state: {:x?}", thread);
-        }
-
-        let (va_regions, mapped_files, vdso) = get_va_regions(pid)?;
-
-        tracing::debug!("VA regions {:x?}", va_regions);
-        tracing::debug!("Mapped files {:x?}", mapped_files);
-        tracing::debug!("vDSO from the proc maps {:x?}", vdso);
-
-        let aux_vector = get_aux_vector(pid)?;
-
-        tracing::debug!("Auxiliary vector {:x?}", aux_vector);
-
-        let page_size = match sysconf(SysconfVar::PAGE_SIZE) {
-            Ok(s) => match s {
-                Some(s) => s as usize,
-                None => 0x1000_usize,
-            },
-            Err(_) => 0x1000_usize,
-        };
-
-        Ok(Self {
-            pid,
-            threads,
-            va_regions,
-            mapped_files,
-            aux_vector,
-            page_size,
-        })
-    }
-}
-
-impl Drop for ProcessView {
-    fn drop(&mut self) {
-        tracing::info!(
-            "Detaching from {} threads of process {}",
-            self.threads.len(),
-            self.pid
-        );
-
-        for thread in &self.threads {
-            match sys::ptrace::detach(thread.tid, None) {
-                Ok(_) => {
-                    tracing::debug!("Thread {} resumed", thread.tid);
-                }
-                Err(e) => {
-                    tracing::error!("Thread {} failed to resume: {:?}", thread.tid, e);
-                }
-            };
-        }
-    }
-}
-
-/// Trait for those able to read the process virtual memory.
-trait ReadProcessMemory {
-    /// Read process memory into `buf` starting at the virtual address `base`,
-    /// and returns the number of bytes and or the error.
-    fn read_process_memory(&mut self, base: usize, buf: &mut [u8]) -> Result<usize, CoreError>;
-}
-
-/// A fast process memory reader employing the `process_vm_readv` system call
-/// available on Linux 3.2+. It might be disabled on some systems in the kernel configuration.
-struct FastMemoryReader {
-    pid: Pid,
-}
-
-impl FastMemoryReader {
-    pub fn new(pid: Pid) -> Result<Self, CoreError> {
-        Ok(Self { pid })
-    }
-}
-
-impl ReadProcessMemory for FastMemoryReader {
-    fn read_process_memory(&mut self, base: usize, buf: &mut [u8]) -> Result<usize, CoreError> {
-        let len = buf.len();
-        process_vm_readv(
-            self.pid,
-            &mut [IoSliceMut::new(buf)],
-            &[RemoteIoVec { base, len }],
-        )
-        .map_err(CoreError::NixError)
-    }
-}
-
-/// A slow but more compatible process memory reader, uses the `/proc/<pid>/mem`
-/// file.
-struct SlowMemoryReader {
-    file: std::fs::File,
-}
-
-impl SlowMemoryReader {
-    pub fn new(pid: Pid) -> Result<Self, CoreError> {
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .open(format!("/proc/{pid}/mem"))
-            .map_err(CoreError::IoError)?;
-        Ok(Self { file })
-    }
-}
-
-impl ReadProcessMemory for SlowMemoryReader {
-    fn read_process_memory(&mut self, base: usize, buf: &mut [u8]) -> Result<usize, CoreError> {
-        self.file
-            .seek(std::io::SeekFrom::Start(base as u64))
-            .map_err(CoreError::IoError)?;
-        self.file.read_exact(buf).map_err(CoreError::IoError)?;
-
-        Ok(buf.len())
-    }
-}
-
-/// The `process_vm_readv` system call might be unavailable. An extra check is made to be
-/// sure the ABI works.
-fn process_vm_readv_works() -> bool {
-    let probe_in = [0xc1c2c3c4c5c6c7c8_u64];
-    let mut probe_out = 0u64.to_le_bytes();
-
-    let result = process_vm_readv(
-        nix::unistd::getpid(),
-        &mut [IoSliceMut::new(&mut probe_out)],
-        &[RemoteIoVec {
-            base: probe_in.as_ptr() as usize,
-            len: std::mem::size_of_val(&probe_in),
-        }],
-    );
-
-    if let Err(e) = result {
-        tracing::debug!("process_vm_readv has not succeeded, error {e:?}, won't be using it");
-        return false;
-    }
-
-    if probe_in[0] != u64::from_le_bytes(probe_out) {
-        tracing::debug!(
-            "process_vm_readv did not return expected data: {probe_in:x?} != {probe_out:x?}, won't be using it"
-        );
-        return false;
-    }
-
-    true
 }
 
 /// Writes an ELF core dump file
