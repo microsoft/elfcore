@@ -10,6 +10,7 @@ mod arch;
 mod coredump;
 mod elf;
 mod error;
+mod linux;
 mod ptrace;
 
 pub use coredump::write_core_dump;
