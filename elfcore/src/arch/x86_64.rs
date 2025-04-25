@@ -6,7 +6,7 @@
 #![cfg(target_arch = "x86_64")]
 
 use super::ArchComponentState;
-use crate::ptrace::ptrace_get_reg_set;
+use crate::linux::ptrace::ptrace_get_reg_set;
 use crate::CoreError;
 use nix::unistd::Pid;
 use zerocopy::AsBytes;

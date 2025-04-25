@@ -6,7 +6,7 @@
 use crate::elf::NT_PRFPREG;
 use nix::unistd::Pid;
 
-use super::ptrace;
+use super::linux::ptrace;
 use crate::CoreError;
 
 #[cfg(target_arch = "x86_64")]

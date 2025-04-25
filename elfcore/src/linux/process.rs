@@ -12,7 +12,7 @@ use crate::elf::{
     Elf64_Auxv, Elf64_Ehdr, EI_MAG0, EI_MAG1, EI_MAG2, EI_MAG3, EI_VERSION, ELFMAG0, ELFMAG1,
     ELFMAG2, ELFMAG3, ET_DYN, ET_EXEC, EV_CURRENT,
 };
-use crate::ptrace::ptrace_interrupt;
+use crate::linux::ptrace::ptrace_interrupt;
 use crate::CoreError;
 use nix::libc::Elf64_Phdr;
 use nix::sys;
