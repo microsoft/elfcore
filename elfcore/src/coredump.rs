@@ -263,6 +263,11 @@ fn write_core_dump_inner<T: Write>(
     let mut total_written = 0_usize;
     let mut writer = ElfCoreWriter::new(writer);
 
+    // Check if the process is valid: has threads and va regions
+    if pv.threads().is_empty() || pv.va_regions().is_empty() {
+        return Err(CoreError::CustomSourceInfo);
+    }
+
     tracing::info!(
         "Creating core dump file for process {}. This process id: {}, this thread id: {}",
         pv.pid(),
@@ -1001,5 +1006,172 @@ impl<'a> CoreDumpBuilder<'a> {
             Some(&mut self.custom_notes),
             self.memory_reader,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{ArchState, ThreadView};
+
+    use super::*;
+
+    struct MockProcessInfoSource {
+        pid: nix::unistd::Pid,
+        page_size: usize,
+        regions: Vec<VaRegion>,
+        threads: Vec<ThreadView>,
+    }
+
+    impl ProcessInfoSource for MockProcessInfoSource {
+        fn pid(&self) -> nix::unistd::Pid {
+            self.pid
+        }
+
+        fn page_size(&self) -> usize {
+            self.page_size
+        }
+
+        fn threads(&self) -> &[ThreadView] {
+            &self.threads
+        }
+
+        fn aux_vector(&self) -> Option<&[Elf64_Auxv]> {
+            None
+        }
+
+        fn mapped_files(&self) -> Option<&[MappedFile]> {
+            None
+        }
+
+        fn va_regions(&self) -> &[VaRegion] {
+            &self.regions
+        }
+    }
+
+    struct MockMemoryReader {}
+
+    impl ReadProcessMemory for MockMemoryReader {
+        fn read_process_memory(
+            &mut self,
+            _address: usize,
+            buffer: &mut [u8],
+        ) -> Result<usize, CoreError> {
+            Ok(buffer.len())
+        }
+    }
+
+    /// Test that writing a core dump using a custom source with no threads provided fails
+    #[test]
+    fn test_custom_source_no_threads() {
+        let custom_source = Box::new(MockProcessInfoSource {
+            pid: nix::unistd::getpid(),
+            page_size: 4096,
+            regions: vec![],
+            threads: vec![],
+        });
+
+        let memory_reader = Box::new(MockMemoryReader {});
+
+        let core_dump_builder = CoreDumpBuilder::from_source(custom_source, memory_reader);
+        let res = core_dump_builder.write(std::io::sink());
+        matches!(res, Err(CoreError::CustomSourceInfo));
+    }
+
+    /// Test that writing a core dump using a custom source with no regions provided fails
+    #[test]
+    fn test_custom_source_no_regions() {
+        let custom_source = Box::new(MockProcessInfoSource {
+            pid: nix::unistd::getpid(),
+            page_size: 4096,
+            regions: vec![],
+            threads: vec![ThreadView {
+                flags: 0, // Kernel flags for the process
+                tid: nix::unistd::Pid::from_raw(0),
+                uid: 0,               // User ID
+                gid: 0,               // Group ID
+                comm: "".to_string(), // Command name
+                ppid: 0,              // Parent PID
+                pgrp: 0,              // Process group ID
+                nice: 0,              // Nice value
+                state: 0,             // Process state
+                utime: 0,             // User time
+                stime: 0,             // System time
+                cutime: 0,            // Children User time
+                cstime: 0,            // Children User time
+                cursig: 0,            // Current signal
+                session: 0,           // Session ID of the process
+                sighold: 0,           // Blocked signal
+                sigpend: 0,           // Pending signal
+                cmd_line: "".to_string(),
+
+                arch_state: Box::new(ArchState {
+                    gpr_state: vec![0; 27],
+                    components: vec![],
+                }),
+            }],
+        });
+
+        let memory_reader = Box::new(MockMemoryReader {});
+
+        let core_dump_builder = CoreDumpBuilder::from_source(custom_source, memory_reader);
+        let res = core_dump_builder.write(std::io::sink());
+        matches!(res, Err(CoreError::CustomSourceInfo));
+    }
+
+    /// Test that writing a core dump using a custom source with minimal info(threads, va regions,
+    /// pid) succeeds
+    #[test]
+    fn test_custom_source_success() {
+        let slice = [0_u8; 4096];
+        // region that maps on the above slice
+        let region = VaRegion {
+            begin: 0x1000,
+            end: 0x2000,
+            offset: slice.as_ptr() as u64,
+            mapped_file_name: None,
+            protection: VaProtection {
+                read: true,
+                write: false,
+                execute: false,
+                is_private: false,
+            },
+        };
+        let custom_source = Box::new(MockProcessInfoSource {
+            pid: nix::unistd::getpid(),
+            page_size: 4096,
+            regions: vec![region],
+            threads: vec![ThreadView {
+                flags: 0, // Kernel flags for the process
+                tid: nix::unistd::getpid(),
+                uid: 0,               // User ID
+                gid: 0,               // Group ID
+                comm: "".to_string(), // Command name
+                ppid: 0,              // Parent PID
+                pgrp: 0,              // Process group ID
+                nice: 0,              // Nice value
+                state: 0,             // Process state
+                utime: 0,             // User time
+                stime: 0,             // System time
+                cutime: 0,            // Children User time
+                cstime: 0,            // Children User time
+                cursig: 0,            // Current signal
+                session: 0,           // Session ID of the process
+                sighold: 0,           // Blocked signal
+                sigpend: 0,           // Pending signal
+                cmd_line: "".to_string(),
+
+                arch_state: Box::new(ArchState {
+                    gpr_state: vec![0; 27],
+                    components: vec![],
+                }),
+            }],
+        });
+
+        let memory_reader = Box::new(MockMemoryReader {});
+
+        let core_dump_builder = CoreDumpBuilder::from_source(custom_source, memory_reader);
+        let res = core_dump_builder.write(std::io::sink());
+        res.as_ref().unwrap();
+        assert!(res.is_ok());
     }
 }
