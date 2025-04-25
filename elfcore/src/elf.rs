@@ -28,8 +28,10 @@ pub const ELFMAG3: u8 = b'F';
 pub const EV_CURRENT: u8 = 1;
 
 /// Executable file
+#[cfg(target_os = "linux")]
 pub const ET_EXEC: u16 = 2;
 /// Shared object file
+#[cfg(target_os = "linux")]
 pub const ET_DYN: u16 = 3;
 /// Core file
 pub const ET_CORE: u16 = 4;
@@ -52,6 +54,7 @@ pub const PT_NOTE: u32 = 4;
 /// Program status note
 pub const NT_PRSTATUS: u32 = 1;
 /// Program floating point registers note
+#[cfg(target_os = "linux")]
 pub const NT_PRFPREG: u32 = 2;
 /// Program information note
 pub const NT_PRPSINFO: u32 = 3;
@@ -165,4 +168,18 @@ pub struct Elf64_Ehdr {
     pub e_shentsize: u16,
     pub e_shnum: u16,
     pub e_shstrndx: u16,
+}
+
+/// ELF program header
+#[derive(AsBytes, FromBytes, FromZeroes)]
+#[repr(C)]
+pub struct Elf64_Phdr {
+    pub p_type: u32,
+    pub p_flags: u32,
+    pub p_offset: u64,
+    pub p_vaddr: u64,
+    pub p_paddr: u64,
+    pub p_filesz: u64,
+    pub p_memsz: u64,
+    pub p_align: u64,
 }

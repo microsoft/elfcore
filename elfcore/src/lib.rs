@@ -3,27 +3,28 @@
 
 //! A Rust library for creating ELF core dump files.
 
-#![cfg(target_os = "linux")]
 #![warn(missing_docs)]
 
 mod arch;
 mod coredump;
 mod elf;
 mod error;
+
+#[cfg(target_os = "linux")]
 mod linux;
 
 pub use arch::ArchComponentState;
 pub use arch::ArchState;
-pub use coredump::write_core_dump;
 pub use coredump::CoreDumpBuilder;
 pub use coredump::MappedFile;
 pub use coredump::VaProtection;
 pub use coredump::VaRegion;
 pub use elf::Elf64_Auxv;
 pub use error::CoreError;
-pub use linux::ProcessView;
-pub use linux::ThreadView;
-pub use nix::unistd::Pid;
+
+// Linux specific functionality
+#[cfg(target_os = "linux")]
+pub use {coredump::write_core_dump, linux::ProcessView};
 
 /// Trait for those able to read the process virtual memory.
 pub trait ReadProcessMemory {
@@ -55,14 +56,14 @@ pub trait ReadProcessMemory {
 /// use std::fs::File;
 ///
 /// struct CustomSource {
-///    pid: nix::unistd::Pid,
+///    pid: i32,
 ///    threads: Vec<ThreadView>,
 ///    va_regions: Vec<VaRegion>,
 ///    page_size: usize,
 /// }
 ///
 /// impl ProcessInfoSource for CustomSource {
-///   fn pid(&self) -> nix::unistd::Pid {
+///   fn pid(&self) -> i32 {
 ///     self.pid
 ///   }
 ///   fn threads(&self) -> &[ThreadView] {
@@ -100,10 +101,10 @@ pub trait ReadProcessMemory {
 /// // Example of ThreadView and VaRegion structures that can be used
 /// // in the custom source
 /// let custom_source = CustomSource {
-///   pid: nix::unistd::getpid(),
+///   pid: nix::unistd::getpid().as_raw(),
 ///   threads: vec![ThreadView {
 ///     flags: 0, // Kernel flags for the process
-///     tid: nix::unistd::getpid(),
+///     tid: nix::unistd::getpid().as_raw(),
 ///     uid: 0,               // User ID
 ///     gid: 0,               // Group ID
 ///     comm: "example".to_string(), // Command name
@@ -171,4 +172,101 @@ pub trait ProcessInfoSource {
     fn aux_vector(&self) -> Option<&[Elf64_Auxv]>;
     /// Retrieves the page size that will be used for alignment of segments
     fn page_size(&self) -> usize;
+}
+
+/// Linux Light-weight Process
+#[derive(Debug)]
+pub struct ThreadView {
+    /// Thread id.
+    pub tid: i32,
+
+    /// Command line.
+    pub cmd_line: String,
+
+    /// The filename of the executable, in parentheses.
+    /// This is visible whether or not the executable is
+    /// swapped out.
+    pub comm: String,
+
+    /// One of the following characters, indicating process
+    /// state:
+    ///          R  Running
+    ///          S  Sleeping in an interruptible wait
+    ///          D  Waiting in uninterruptible disk sleep
+    ///          Z  Zombie
+    ///          T  Stopped (on a signal) or (before Linux 2.6.33)
+    ///             trace stopped
+    ///          t  Tracing stop (Linux 2.6.33 onward)
+    ///          W  Paging (only before Linux 2.6.0)
+    ///          X  Dead (from Linux 2.6.0 onward)
+    ///          x  Dead (Linux 2.6.33 to 3.13 only)
+    ///          K  Wakekill (Linux 2.6.33 to 3.13 only)
+    ///          W  Waking (Linux 2.6.33 to 3.13 only)
+    ///          P  Parked (Linux 3.9 to 3.13 only)
+    pub state: u8,
+
+    /// The PID of the parent of this process.
+    pub ppid: i32,
+
+    /// The process group ID of the process.
+    pub pgrp: i32,
+
+    /// The session ID of the process.
+    pub session: i32,
+
+    /// The kernel flags word of the process.  For bit mean‐
+    /// ings, see the PF_* defines in the Linux kernel
+    /// source file include/linux/sched.h.  Details depend
+    /// on the kernel version.
+    /// The format for this field was %lu before Linux 2.6.
+    pub flags: i32,
+
+    /// Amount of time that this process has been scheduled
+    /// in user mode, measured in clock ticks (divide by
+    /// sysconf(_SC_CLK_TCK)).  This includes guest time,
+    /// guest_time (time spent running a virtual CPU, see
+    /// below), so that applications that are not aware of
+    /// the guest time field do not lose that time from
+    /// their calculations.
+    pub utime: u64,
+
+    /// Amount of time that this process has been scheduled
+    /// in kernel mode, measured in clock ticks (divide by
+    /// sysconf(_SC_CLK_TCK)).
+    pub stime: u64,
+
+    /// Amount of time that this process's waited-for chil‐
+    /// dren have been scheduled in user mode, measured in
+    /// clock ticks (divide by sysconf(_SC_CLK_TCK)).  (See
+    /// also times(2).)  This includes guest time,
+    /// cguest_time (time spent running a virtual CPU, see
+    /// below).
+    pub cutime: u64,
+
+    /// Amount of time that this process's waited-for chil‐
+    /// dren have been scheduled in kernel mode, measured in
+    /// clock ticks (divide by sysconf(_SC_CLK_TCK)).
+    pub cstime: u64,
+
+    /// The nice value (see setpriority(2)), a value in the
+    /// range 19 (low priority) to -20 (high priority).
+    pub nice: u64,
+
+    /// User Id.
+    pub uid: u64,
+
+    /// Group Id.
+    pub gid: u32,
+
+    /// Current signal.
+    pub cursig: u16,
+
+    /// Blocked signal.
+    pub sighold: u64,
+
+    /// Pending signal.
+    pub sigpend: u64,
+
+    /// State of the CPU
+    pub arch_state: Box<arch::ArchState>,
 }

@@ -10,11 +10,11 @@ keywords = ["elf", "coredump", "debugging"]
 categories = ["development-tools::debugging", "os::linux-apis"]
 
 [dependencies]
-
-[target.'cfg(unix)'.dependencies]
-libc.workspace = true
-nix.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 zerocopy.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+nix.workspace = true

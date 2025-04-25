@@ -11,12 +11,10 @@
 //! debug level tracing.
 //!
 
-#![cfg(target_os = "linux")]
+#[cfg(target_os = "linux")]
+use {anyhow::Context, std::path::PathBuf, tracing::Level};
 
-use anyhow::Context;
-use std::path::PathBuf;
-use tracing::Level;
-
+#[cfg(target_os = "linux")]
 pub fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1).peekable();
 
@@ -71,4 +69,9 @@ pub fn main() -> anyhow::Result<()> {
 
     tracing::debug!("wrote {} bytes", n);
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn main() {
+    println!("Creating core dumps for a given Pid is only supported on Linux");
 }

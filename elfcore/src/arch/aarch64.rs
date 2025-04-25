@@ -6,10 +6,11 @@
 #![cfg(target_arch = "aarch64")]
 
 use super::ArchComponentState;
-use crate::ptrace::ptrace_get_reg_set;
 use crate::CoreError;
-use nix::unistd::Pid;
 use zerocopy::AsBytes;
+
+#[cfg(target_os = "linux")]
+use {crate::ptrace::ptrace_get_reg_set, nix::unistd::Pid};
 
 // aarch64 machine
 pub const EM_AARCH64: u16 = 183;
@@ -29,19 +30,24 @@ pub struct elf_gregset_t {
     pub pstate: u64,
 }
 
+#[cfg(target_os = "linux")]
 pub fn get_aarch64_tls(pid: Pid) -> Result<Vec<u8>, CoreError> {
     ptrace_get_reg_set(pid, NT_ARM_TLS)
 }
+#[cfg(target_os = "linux")]
 pub fn get_aarch64_hw_break(pid: Pid) -> Result<Vec<u8>, CoreError> {
     ptrace_get_reg_set(pid, NT_ARM_HW_BREAK)
 }
+#[cfg(target_os = "linux")]
 pub fn get_aarch64_hw_watch(pid: Pid) -> Result<Vec<u8>, CoreError> {
     ptrace_get_reg_set(pid, NT_ARM_HW_WATCH)
 }
+#[cfg(target_os = "linux")]
 pub fn get_aarch64_system_call(pid: Pid) -> Result<Vec<u8>, CoreError> {
     ptrace_get_reg_set(pid, NT_ARM_SYSTEM_CALL)
 }
 
+#[cfg(target_os = "linux")]
 pub fn get_arch_components(pid: Pid) -> Result<Vec<ArchComponentState>, CoreError> {
     let components = vec![
         ArchComponentState {

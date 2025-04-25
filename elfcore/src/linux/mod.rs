@@ -6,4 +6,3 @@ mod process;
 pub mod ptrace;
 
 pub use process::ProcessView;
-pub use process::ThreadView;

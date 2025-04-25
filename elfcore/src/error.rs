@@ -28,6 +28,7 @@ pub enum CoreError {
     InternalError(&'static str),
     /// OS error
     #[error("OS error")]
+    #[cfg(target_os = "linux")]
     NixError(#[from] nix::Error),
     /// I/O error
     #[error("I/O error")]

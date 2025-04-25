@@ -3,11 +3,12 @@
 
 //! A Rust helper library with machine-specific code for ELF core dump files.
 
-use crate::elf::NT_PRFPREG;
-use nix::unistd::Pid;
-
-use super::linux::ptrace;
-use crate::CoreError;
+#[cfg(target_os = "linux")]
+use {
+    super::linux::ptrace,
+    crate::{elf::NT_PRFPREG, CoreError},
+    nix::unistd::Pid,
+};
 
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
@@ -36,6 +37,7 @@ pub struct ArchComponentState {
 pub(crate) trait Arch {
     const EM_ELF_MACHINE: u16;
 
+    #[cfg(target_os = "linux")]
     fn new(pid: Pid) -> Result<Box<Self>, CoreError>;
     #[allow(dead_code)]
     fn name() -> &'static str;
@@ -60,6 +62,7 @@ impl Arch for ArchState {
     #[cfg(target_arch = "aarch64")]
     const EM_ELF_MACHINE: u16 = aarch64::EM_AARCH64;
 
+    #[cfg(target_os = "linux")]
     fn new(pid: Pid) -> Result<Box<Self>, CoreError> {
         tracing::debug!("Getting GP registers for #{pid}");
         let gpr_state = ptrace::get_gp_reg_set(pid)?;

@@ -11,15 +11,16 @@ use super::arch::Arch;
 use crate::elf::*;
 use crate::CoreError;
 use crate::ProcessInfoSource;
-use crate::ProcessView;
 use crate::ReadProcessMemory;
-use nix::libc::Elf64_Phdr;
 use smallvec::smallvec;
 use smallvec::SmallVec;
 use std::io::Read;
 use std::io::Write;
 use std::slice;
 use zerocopy::AsBytes;
+
+#[cfg(target_os = "linux")]
+use crate::ProcessView;
 
 const ELF_HEADER_ALIGN: usize = 8;
 const ELF_NOTE_ALIGN: usize = 4;
@@ -249,6 +250,7 @@ fn get_elf_notes_sizes(
 /// * `pv` - a `ProcessView` reference.
 ///
 /// To access new functionality, use [`CoreDumpBuilder`]
+#[cfg(target_os = "linux")]
 pub fn write_core_dump<T: Write>(writer: T, pv: &ProcessView) -> Result<usize, CoreError> {
     let memory_reader = ProcessView::create_memory_reader(pv.pid)?;
     write_core_dump_inner(writer, pv, None, memory_reader)
@@ -268,12 +270,15 @@ fn write_core_dump_inner<T: Write>(
         return Err(CoreError::CustomSourceInfo);
     }
 
+    #[cfg(target_os = "linux")]
     tracing::info!(
         "Creating core dump file for process {}. This process id: {}, this thread id: {}",
         pv.pid(),
         nix::unistd::getpid(),
         nix::unistd::gettid()
     );
+    #[cfg(not(target_os = "linux"))]
+    tracing::info!("Creating core dump file for process {}.", pv.pid());
 
     let note_sizes = get_elf_notes_sizes(pv, custom_notes.as_deref())?;
 
@@ -577,7 +582,7 @@ fn write_process_info_note<T: Write>(
                 pr_flag: thread_view.flags as u64,
                 pr_uid: thread_view.uid as u32,
                 pr_gid: thread_view.gid,
-                pr_pid: thread_view.tid.as_raw() as u32,
+                pr_pid: thread_view.tid as u32,
                 pr_ppid: thread_view.ppid as u32,
                 pr_pgrp: thread_view.pgrp as u32,
                 pr_sid: thread_view.session as u32,
@@ -640,7 +645,7 @@ fn write_process_status_notes<T: Write>(
             pad0: 0,
             pr_sigpend: thread_view.sigpend,
             pr_sighold: thread_view.sighold,
-            pr_pid: thread_view.tid.as_raw() as u32,
+            pr_pid: thread_view.tid as u32,
             pr_ppid: thread_view.ppid as u32,
             pr_pgrp: thread_view.pgrp as u32,
             pr_sid: thread_view.session as u32,
@@ -957,6 +962,7 @@ pub struct CoreDumpBuilder<'a> {
 
 impl<'a> CoreDumpBuilder<'a> {
     /// Create a new core dump builder for the process with the provided PID
+    #[cfg(target_os = "linux")]
     pub fn new(pid: libc::pid_t) -> Result<Self, CoreError> {
         let pv = ProcessView::new(pid)?;
         let memory_reader = ProcessView::create_memory_reader(pv.pid)?;
@@ -1016,14 +1022,14 @@ mod tests {
     use super::*;
 
     struct MockProcessInfoSource {
-        pid: nix::unistd::Pid,
+        pid: i32,
         page_size: usize,
         regions: Vec<VaRegion>,
         threads: Vec<ThreadView>,
     }
 
     impl ProcessInfoSource for MockProcessInfoSource {
-        fn pid(&self) -> nix::unistd::Pid {
+        fn pid(&self) -> i32 {
             self.pid
         }
 
@@ -1064,7 +1070,7 @@ mod tests {
     #[test]
     fn test_custom_source_no_threads() {
         let custom_source = Box::new(MockProcessInfoSource {
-            pid: nix::unistd::getpid(),
+            pid: 1,
             page_size: 4096,
             regions: vec![],
             threads: vec![],
@@ -1081,12 +1087,12 @@ mod tests {
     #[test]
     fn test_custom_source_no_regions() {
         let custom_source = Box::new(MockProcessInfoSource {
-            pid: nix::unistd::getpid(),
+            pid: 1,
             page_size: 4096,
             regions: vec![],
             threads: vec![ThreadView {
                 flags: 0, // Kernel flags for the process
-                tid: nix::unistd::Pid::from_raw(0),
+                tid: 1,
                 uid: 0,               // User ID
                 gid: 0,               // Group ID
                 comm: "".to_string(), // Command name
@@ -1137,12 +1143,12 @@ mod tests {
             },
         };
         let custom_source = Box::new(MockProcessInfoSource {
-            pid: nix::unistd::getpid(),
+            pid: 1,
             page_size: 4096,
             regions: vec![region],
             threads: vec![ThreadView {
                 flags: 0, // Kernel flags for the process
-                tid: nix::unistd::getpid(),
+                tid: 1,
                 uid: 0,               // User ID
                 gid: 0,               // Group ID
                 comm: "".to_string(), // Command name
