@@ -12,7 +12,12 @@
 //!
 
 #[cfg(target_os = "linux")]
-use {anyhow::Context, std::path::PathBuf, tracing::Level};
+use {
+    anyhow::Context,
+    elfcore::{CoreDumpBuilder, LinuxProcessMemoryReader, ProcessView},
+    std::path::PathBuf,
+    tracing::Level,
+};
 
 #[cfg(target_os = "linux")]
 pub fn main() -> anyhow::Result<()> {
@@ -51,7 +56,7 @@ pub fn main() -> anyhow::Result<()> {
         .with_max_level(level)
         .init();
 
-    let mut builder = elfcore::CoreDumpBuilder::new(pid)?;
+    let mut builder = CoreDumpBuilder::<ProcessView, LinuxProcessMemoryReader>::new(pid)?;
 
     let mut file = note_file_path
         .map(|path| {

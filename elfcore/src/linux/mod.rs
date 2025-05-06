@@ -5,4 +5,5 @@ mod memory;
 mod process;
 pub mod ptrace;
 
+pub use memory::LinuxProcessMemoryReader;
 pub use process::ProcessView;

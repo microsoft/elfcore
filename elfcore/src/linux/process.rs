@@ -5,7 +5,7 @@
 //!
 //! Gathering process information.
 
-use super::memory::{FastMemoryReader, SlowMemoryReader};
+use super::memory::LinuxProcessMemoryReader;
 use super::ptrace::ptrace_interrupt;
 use crate::arch::Arch;
 use crate::coredump::{MappedFile, MappedFileRegion, VaProtection, VaRegion};
@@ -13,7 +13,7 @@ use crate::elf::{
     Elf64_Auxv, Elf64_Ehdr, EI_MAG0, EI_MAG1, EI_MAG2, EI_MAG3, EI_VERSION, ELFMAG0, ELFMAG1,
     ELFMAG2, ELFMAG3, ET_DYN, ET_EXEC, EV_CURRENT,
 };
-use crate::{arch, ProcessInfoSource, ReadProcessMemory};
+use crate::{arch, ProcessInfoSource};
 use crate::{CoreError, ThreadView};
 use nix::libc::Elf64_Phdr;
 use nix::sys;
@@ -505,16 +505,8 @@ impl ProcessView {
     }
 
     /// Retrieves the memory reader for access to memory regions
-    pub(crate) fn create_memory_reader(pid: Pid) -> Result<Box<dyn ReadProcessMemory>, CoreError> {
-        let memory_reader = if process_vm_readv_works() {
-            tracing::info!("Using the fast process memory read on this system");
-            Box::new(FastMemoryReader::new(pid)?) as Box<dyn ReadProcessMemory>
-        } else {
-            tracing::info!("Using the slow process memory read on this system");
-            Box::new(SlowMemoryReader::new(pid)?) as Box<dyn ReadProcessMemory>
-        };
-
-        Ok(memory_reader)
+    pub(crate) fn create_memory_reader(pid: Pid) -> Result<LinuxProcessMemoryReader, CoreError> {
+        LinuxProcessMemoryReader::new(pid)
     }
 }
 
@@ -558,34 +550,4 @@ impl Drop for ProcessView {
             };
         }
     }
-}
-
-/// The `process_vm_readv` system call might be unavailable. An extra check is made to be
-/// sure the ABI works.
-pub(crate) fn process_vm_readv_works() -> bool {
-    let probe_in = [0xc1c2c3c4c5c6c7c8_u64];
-    let mut probe_out = 0u64.to_le_bytes();
-
-    let result = process_vm_readv(
-        nix::unistd::getpid(),
-        &mut [IoSliceMut::new(&mut probe_out)],
-        &[RemoteIoVec {
-            base: probe_in.as_ptr() as usize,
-            len: std::mem::size_of_val(&probe_in),
-        }],
-    );
-
-    if let Err(e) = result {
-        tracing::debug!("process_vm_readv has not succeeded, error {e:?}, won't be using it");
-        return false;
-    }
-
-    if probe_in[0] != u64::from_le_bytes(probe_out) {
-        tracing::debug!(
-            "process_vm_readv did not return expected data: {probe_in:x?} != {probe_out:x?}, won't be using it"
-        );
-        return false;
-    }
-
-    true
 }

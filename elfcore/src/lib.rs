@@ -24,7 +24,10 @@ pub use error::CoreError;
 
 // Linux specific functionality
 #[cfg(target_os = "linux")]
-pub use {coredump::write_core_dump, linux::ProcessView};
+pub use {
+    coredump::write_core_dump,
+    linux::{LinuxProcessMemoryReader, ProcessView},
+};
 
 /// Trait for those able to read the process virtual memory.
 pub trait ReadProcessMemory {
@@ -145,7 +148,7 @@ pub trait ReadProcessMemory {
 /// let custom_reader = CustomReader {};
 ///
 /// // Create a core dump builder using the custom source and reader
-/// let mut cdb = CoreDumpBuilder::from_source(Box::new(custom_source), Box::new(custom_reader));
+/// let mut cdb = CoreDumpBuilder::from_source(custom_source, custom_reader);
 ///
 /// // Writer used for example purposes only
 /// let writer = std::io::sink();

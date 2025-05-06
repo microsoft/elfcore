@@ -20,7 +20,7 @@ use std::slice;
 use zerocopy::AsBytes;
 
 #[cfg(target_os = "linux")]
-use crate::ProcessView;
+use crate::{linux::LinuxProcessMemoryReader, ProcessView};
 
 const ELF_HEADER_ALIGN: usize = 8;
 const ELF_NOTE_ALIGN: usize = 4;
@@ -162,8 +162,8 @@ struct CustomFileNote<'a> {
     pub note_len: usize,
 }
 
-fn get_elf_notes_sizes(
-    pv: &dyn ProcessInfoSource,
+fn get_elf_notes_sizes<P: ProcessInfoSource>(
+    pv: &P,
     custom_notes: Option<&[CustomFileNote<'_>]>,
 ) -> Result<NoteSizes, CoreError> {
     let header_and_name =
@@ -252,15 +252,20 @@ fn get_elf_notes_sizes(
 /// To access new functionality, use [`CoreDumpBuilder`]
 #[cfg(target_os = "linux")]
 pub fn write_core_dump<T: Write>(writer: T, pv: &ProcessView) -> Result<usize, CoreError> {
-    let memory_reader = ProcessView::create_memory_reader(pv.pid)?;
-    write_core_dump_inner(writer, pv, None, memory_reader)
+    let mut memory_reader = ProcessView::create_memory_reader(pv.pid)?;
+    write_core_dump_inner::<T, ProcessView, LinuxProcessMemoryReader>(
+        writer,
+        pv,
+        None,
+        &mut memory_reader,
+    )
 }
 
-fn write_core_dump_inner<T: Write>(
+fn write_core_dump_inner<T: Write, P: ProcessInfoSource, M: ReadProcessMemory>(
     writer: T,
-    pv: &dyn ProcessInfoSource,
+    pv: &P,
     custom_notes: Option<&mut [CustomFileNote<'_>]>,
-    memory_reader: Box<dyn ReadProcessMemory>,
+    memory_reader: &mut M,
 ) -> Result<usize, CoreError> {
     let mut total_written = 0_usize;
     let mut writer = ElfCoreWriter::new(writer);
@@ -309,9 +314,9 @@ fn round_up(value: usize, alignment: usize) -> usize {
     }
 }
 
-fn write_elf_header<T: Write>(
+fn write_elf_header<T: Write, P: ProcessInfoSource>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &dyn ProcessInfoSource,
+    pv: &P,
 ) -> Result<usize, CoreError> {
     let mut e_ident = [0_u8; 16];
     e_ident[EI_MAG0] = ELFMAG0;
@@ -360,9 +365,9 @@ fn write_elf_header<T: Write>(
     Ok(slice.len())
 }
 
-fn write_program_headers<T: Write>(
+fn write_program_headers<T: Write, P: ProcessInfoSource>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &dyn ProcessInfoSource,
+    pv: &P,
     note_sizes: &NoteSizes,
 ) -> Result<usize, CoreError> {
     tracing::info!(
@@ -557,9 +562,9 @@ fn write_elf_note_file<T: Write>(
     Ok(written)
 }
 
-fn write_process_info_note<T: Write>(
+fn write_process_info_note<T: Write, P: ProcessInfoSource>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &dyn ProcessInfoSource,
+    pv: &P,
 ) -> Result<usize, CoreError> {
     let mut written = 0_usize;
 
@@ -625,9 +630,9 @@ fn write_process_info_note<T: Write>(
     Ok(written)
 }
 
-fn write_process_status_notes<T: Write>(
+fn write_process_status_notes<T: Write, P: ProcessInfoSource>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &dyn ProcessInfoSource,
+    pv: &P,
 ) -> Result<usize, CoreError> {
     let mut total_written = 0_usize;
 
@@ -704,9 +709,9 @@ fn write_process_status_notes<T: Write>(
     Ok(total_written)
 }
 
-fn write_aux_vector_note<T: Write>(
+fn write_aux_vector_note<T: Write, P: ProcessInfoSource>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &dyn ProcessInfoSource,
+    pv: &P,
 ) -> Result<usize, CoreError> {
     tracing::info!(
         "Writing auxiliary vector at offset {}...",
@@ -723,9 +728,9 @@ fn write_aux_vector_note<T: Write>(
     Ok(written)
 }
 
-fn write_mapped_files_note<T: Write>(
+fn write_mapped_files_note<T: Write, P: ProcessInfoSource>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &dyn ProcessInfoSource,
+    pv: &P,
 ) -> Result<usize, CoreError> {
     tracing::info!(
         "Writing mapped files note at offset {}...",
@@ -805,9 +810,9 @@ fn write_custom_notes<T: Write>(
     Ok(total_written)
 }
 
-fn write_elf_notes<T: Write>(
+fn write_elf_notes<T: Write, P: ProcessInfoSource>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &dyn ProcessInfoSource,
+    pv: &P,
     note_sizes: &NoteSizes,
     custom_notes: Option<&mut [CustomFileNote<'_>]>,
 ) -> Result<usize, CoreError> {
@@ -867,12 +872,17 @@ fn write_elf_notes<T: Write>(
     Ok(total_written)
 }
 
-fn write_va_region<T: Write>(
+fn write_va_region<T, P, M>(
     writer: &mut ElfCoreWriter<T>,
     va_region: &VaRegion,
-    pv: &dyn ProcessInfoSource,
-    memory_reader: &mut Box<dyn ReadProcessMemory>,
-) -> Result<usize, CoreError> {
+    pv: &P,
+    memory_reader: &mut M,
+) -> Result<usize, CoreError>
+where
+    T: Write,
+    P: ProcessInfoSource,
+    M: ReadProcessMemory,
+{
     let mut dumped = 0_usize;
     let mut address = va_region.begin;
     let mut buffer = [0_u8; BUFFER_SIZE];
@@ -918,11 +928,16 @@ fn write_va_region<T: Write>(
     Ok(dumped)
 }
 
-fn write_va_regions<T: Write>(
+fn write_va_regions<T, P, M>(
     writer: &mut ElfCoreWriter<T>,
-    pv: &dyn ProcessInfoSource,
-    mut memory_reader: Box<dyn ReadProcessMemory>,
-) -> Result<usize, CoreError> {
+    pv: &P,
+    memory_reader: &mut M,
+) -> Result<usize, CoreError>
+where
+    T: Write,
+    P: ProcessInfoSource,
+    M: ReadProcessMemory,
+{
     let mut written = 0_usize;
 
     tracing::info!(
@@ -931,7 +946,7 @@ fn write_va_regions<T: Write>(
     );
 
     for va_region in pv.va_regions() {
-        let dumped = write_va_region(writer, va_region, pv, &mut memory_reader)?;
+        let dumped = write_va_region(writer, va_region, pv, memory_reader)?;
 
         written += dumped;
 
@@ -954,31 +969,30 @@ fn write_va_regions<T: Write>(
 /// optionally with custom notes with content from files
 /// This also supports generating core dumps with information
 /// from a custom source.
-pub struct CoreDumpBuilder<'a> {
-    pv: Box<dyn ProcessInfoSource>,
+pub struct CoreDumpBuilder<'a, P: ProcessInfoSource, M: ReadProcessMemory> {
+    pv: P,
     custom_notes: Vec<CustomFileNote<'a>>,
-    memory_reader: Box<dyn ReadProcessMemory>,
+    memory_reader: M,
 }
 
-impl<'a> CoreDumpBuilder<'a> {
+impl<'a, P: ProcessInfoSource, M: ReadProcessMemory> CoreDumpBuilder<'a, P, M> {
     /// Create a new core dump builder for the process with the provided PID
     #[cfg(target_os = "linux")]
-    pub fn new(pid: libc::pid_t) -> Result<Self, CoreError> {
+    pub fn new(
+        pid: libc::pid_t,
+    ) -> Result<CoreDumpBuilder<'a, ProcessView, LinuxProcessMemoryReader>, CoreError> {
         let pv = ProcessView::new(pid)?;
         let memory_reader = ProcessView::create_memory_reader(pv.pid)?;
 
-        Ok(Self {
-            pv: Box::new(pv) as Box<dyn ProcessInfoSource>,
+        Ok(CoreDumpBuilder {
+            pv,
             custom_notes: Vec::new(),
             memory_reader,
         })
     }
 
     /// Create a new core dump builder from a custom `ProcessInfoSource`
-    pub fn from_source(
-        source: Box<dyn ProcessInfoSource>,
-        memory_reader: Box<dyn ReadProcessMemory>,
-    ) -> CoreDumpBuilder<'a> {
+    pub fn from_source(source: P, memory_reader: M) -> CoreDumpBuilder<'a, P, M> {
         CoreDumpBuilder {
             pv: source,
             custom_notes: Vec::new(),
@@ -1008,9 +1022,9 @@ impl<'a> CoreDumpBuilder<'a> {
     pub fn write<T: Write>(mut self, writer: T) -> Result<usize, CoreError> {
         write_core_dump_inner(
             writer,
-            self.pv.as_ref(),
+            &self.pv,
             Some(&mut self.custom_notes),
-            self.memory_reader,
+            &mut self.memory_reader,
         )
     }
 }
@@ -1069,14 +1083,14 @@ mod tests {
     /// Test that writing a core dump using a custom source with no threads provided fails
     #[test]
     fn test_custom_source_no_threads() {
-        let custom_source = Box::new(MockProcessInfoSource {
+        let custom_source = MockProcessInfoSource {
             pid: 1,
             page_size: 4096,
             regions: vec![],
             threads: vec![],
-        });
+        };
 
-        let memory_reader = Box::new(MockMemoryReader {});
+        let memory_reader = MockMemoryReader {};
 
         let core_dump_builder = CoreDumpBuilder::from_source(custom_source, memory_reader);
         let res = core_dump_builder.write(std::io::sink());
@@ -1086,7 +1100,7 @@ mod tests {
     /// Test that writing a core dump using a custom source with no regions provided fails
     #[test]
     fn test_custom_source_no_regions() {
-        let custom_source = Box::new(MockProcessInfoSource {
+        let custom_source = MockProcessInfoSource {
             pid: 1,
             page_size: 4096,
             regions: vec![],
@@ -1115,9 +1129,9 @@ mod tests {
                     components: vec![],
                 }),
             }],
-        });
+        };
 
-        let memory_reader = Box::new(MockMemoryReader {});
+        let memory_reader = MockMemoryReader {};
 
         let core_dump_builder = CoreDumpBuilder::from_source(custom_source, memory_reader);
         let res = core_dump_builder.write(std::io::sink());
@@ -1142,7 +1156,7 @@ mod tests {
                 is_private: false,
             },
         };
-        let custom_source = Box::new(MockProcessInfoSource {
+        let custom_source = MockProcessInfoSource {
             pid: 1,
             page_size: 4096,
             regions: vec![region],
@@ -1171,9 +1185,9 @@ mod tests {
                     components: vec![],
                 }),
             }],
-        });
+        };
 
-        let memory_reader = Box::new(MockMemoryReader {});
+        let memory_reader = MockMemoryReader {};
 
         let core_dump_builder = CoreDumpBuilder::from_source(custom_source, memory_reader);
         let res = core_dump_builder.write(std::io::sink());
