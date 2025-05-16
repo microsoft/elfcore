@@ -20,7 +20,7 @@ use std::slice;
 use zerocopy::AsBytes;
 
 #[cfg(target_os = "linux")]
-use crate::{linux::LinuxProcessMemoryReader, ProcessView};
+use crate::{LinuxProcessMemoryReader, ProcessView};
 
 const ELF_HEADER_ALIGN: usize = 8;
 const ELF_NOTE_ALIGN: usize = 4;

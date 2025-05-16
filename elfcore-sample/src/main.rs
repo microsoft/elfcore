@@ -12,12 +12,13 @@
 //!
 
 #[cfg(target_os = "linux")]
-use {
-    anyhow::Context,
-    elfcore::{CoreDumpBuilder, LinuxProcessMemoryReader, ProcessView},
-    std::path::PathBuf,
-    tracing::Level,
-};
+use anyhow::Context;
+#[cfg(target_os = "linux")]
+use elfcore::{CoreDumpBuilder, LinuxProcessMemoryReader, ProcessView};
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
+#[cfg(target_os = "linux")]
+use tracing::Level;
 
 #[cfg(target_os = "linux")]
 pub fn main() -> anyhow::Result<()> {

@@ -24,10 +24,9 @@ pub use error::CoreError;
 
 // Linux specific functionality
 #[cfg(target_os = "linux")]
-pub use {
-    coredump::write_core_dump,
-    linux::{LinuxProcessMemoryReader, ProcessView},
-};
+pub use coredump::write_core_dump;
+#[cfg(target_os = "linux")]
+pub use linux::{LinuxProcessMemoryReader, ProcessView};
 
 /// Trait for those able to read the process virtual memory.
 pub trait ReadProcessMemory {

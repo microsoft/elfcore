@@ -4,11 +4,11 @@
 //! A Rust helper library with machine-specific code for ELF core dump files.
 
 #[cfg(target_os = "linux")]
-use {
-    super::linux::ptrace,
-    crate::{elf::NT_PRFPREG, CoreError},
-    nix::unistd::Pid,
-};
+use super::linux::ptrace;
+#[cfg(target_os = "linux")]
+use crate::{elf::NT_PRFPREG, CoreError};
+#[cfg(target_os = "linux")]
+use nix::unistd::Pid;
 
 #[cfg(target_arch = "x86_64")]
 mod x86_64;

@@ -10,7 +10,9 @@ use crate::CoreError;
 use zerocopy::AsBytes;
 
 #[cfg(target_os = "linux")]
-use {crate::ptrace::ptrace_get_reg_set, nix::unistd::Pid};
+use crate::ptrace::ptrace_get_reg_set;
+#[cfg(target_os = "linux")]
+use nix::unistd::Pid;
 
 // aarch64 machine
 pub const EM_AARCH64: u16 = 183;

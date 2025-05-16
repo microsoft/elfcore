@@ -3,12 +3,15 @@
 
 //! x86_64 specifics for ELF core dump files.
 
-use zerocopy::AsBytes;
 #[cfg(target_os = "linux")]
-use {
-    super::ArchComponentState, crate::linux::ptrace::ptrace_get_reg_set, crate::CoreError,
-    nix::unistd::Pid,
-};
+use super::ArchComponentState;
+#[cfg(target_os = "linux")]
+use crate::linux::ptrace::ptrace_get_reg_set;
+#[cfg(target_os = "linux")]
+use crate::CoreError;
+#[cfg(target_os = "linux")]
+use nix::unistd::Pid;
+use zerocopy::AsBytes;
 
 // amd64 machine
 pub const EM_X86_64: u16 = 62;
