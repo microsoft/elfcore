@@ -3,11 +3,13 @@
 
 //! x86_64 specifics for ELF core dump files.
 
-#![cfg(target_arch = "x86_64")]
-
+#[cfg(target_os = "linux")]
 use super::ArchComponentState;
-use crate::ptrace::ptrace_get_reg_set;
+#[cfg(target_os = "linux")]
+use crate::linux::ptrace::ptrace_get_reg_set;
+#[cfg(target_os = "linux")]
 use crate::CoreError;
+#[cfg(target_os = "linux")]
 use nix::unistd::Pid;
 use zerocopy::AsBytes;
 
@@ -15,6 +17,7 @@ use zerocopy::AsBytes;
 pub const EM_X86_64: u16 = 62;
 
 // amd64 notes
+#[cfg(target_os = "linux")]
 pub const NT_X86_XSTATE: u32 = 0x202;
 
 #[repr(C, packed)]
@@ -52,10 +55,12 @@ pub struct elf_gregset_t {
 //const AT_SYSINFO_X86: u64 = 32;
 //const AT_SYSINFO_EHDR_X86: u64 = 33; returns vdso
 
+#[cfg(target_os = "linux")]
 pub fn get_x86_xsave_set(pid: Pid) -> Result<Vec<u8>, CoreError> {
     ptrace_get_reg_set(pid, NT_X86_XSTATE)
 }
 
+#[cfg(target_os = "linux")]
 pub fn get_arch_components(pid: Pid) -> Result<Vec<ArchComponentState>, CoreError> {
     let components = vec![ArchComponentState {
         name: "XSAVE",

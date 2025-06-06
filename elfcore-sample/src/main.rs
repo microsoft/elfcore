@@ -11,16 +11,20 @@
 //! debug level tracing.
 //!
 
-#![cfg(target_os = "linux")]
-
+#[cfg(target_os = "linux")]
 use anyhow::Context;
+#[cfg(target_os = "linux")]
+use elfcore::{CoreDumpBuilder, LinuxProcessMemoryReader, ProcessView};
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
+#[cfg(target_os = "linux")]
 use tracing::Level;
 
+#[cfg(target_os = "linux")]
 pub fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1).peekable();
 
-    let level = if args.peek().map_or(false, |x| x == "-v") {
+    let level = if args.peek().is_some_and(|x| x == "-v") {
         args.next();
         Level::DEBUG
     } else {
@@ -53,7 +57,7 @@ pub fn main() -> anyhow::Result<()> {
         .with_max_level(level)
         .init();
 
-    let mut builder = elfcore::CoreDumpBuilder::new(pid)?;
+    let mut builder = CoreDumpBuilder::<ProcessView, LinuxProcessMemoryReader>::new(pid)?;
 
     let mut file = note_file_path
         .map(|path| {
@@ -71,4 +75,9 @@ pub fn main() -> anyhow::Result<()> {
 
     tracing::debug!("wrote {} bytes", n);
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn main() {
+    println!("Creating core dumps for a given Pid is only supported on Linux");
 }

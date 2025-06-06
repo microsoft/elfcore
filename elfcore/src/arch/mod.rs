@@ -3,11 +3,12 @@
 
 //! A Rust helper library with machine-specific code for ELF core dump files.
 
-use crate::elf::NT_PRFPREG;
+#[cfg(target_os = "linux")]
+use super::linux::ptrace;
+#[cfg(target_os = "linux")]
+use crate::{elf::NT_PRFPREG, CoreError};
+#[cfg(target_os = "linux")]
 use nix::unistd::Pid;
-
-use super::ptrace;
-use crate::CoreError;
 
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
@@ -19,31 +20,40 @@ mod aarch64;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::elf_gregset_t;
 
+/// Contains SSE registers on amd64, NEON on arm64,
+/// XSAVE state on amd64, etc
 #[derive(Debug)]
 pub struct ArchComponentState {
+    /// Name
     pub name: &'static str,
+    /// Note type
     pub note_type: u32,
+    /// Note name
     pub note_name: &'static [u8],
+    /// Data
     pub data: Vec<u8>,
 }
 
-pub trait Arch {
+pub(crate) trait Arch {
     const EM_ELF_MACHINE: u16;
 
+    #[cfg(target_os = "linux")]
     fn new(pid: Pid) -> Result<Box<Self>, CoreError>;
+    #[allow(dead_code)]
     fn name() -> &'static str;
     fn greg_set(&self) -> elf_gregset_t;
     fn components(&self) -> &Vec<ArchComponentState>;
 }
 
+/// Describes CPU state
 #[derive(Debug)]
 pub struct ArchState {
-    // GP registers.
-    gpr_state: Vec<u64>,
+    /// GP registers.
+    pub gpr_state: Vec<u64>,
 
-    // Contains SSE registers on amd64, NEON on arm64,
-    // XSAVE state on amd64, etc
-    components: Vec<ArchComponentState>,
+    /// Contains SSE registers on amd64, NEON on arm64,
+    /// XSAVE state on amd64, etc
+    pub components: Vec<ArchComponentState>,
 }
 
 impl Arch for ArchState {
@@ -52,6 +62,7 @@ impl Arch for ArchState {
     #[cfg(target_arch = "aarch64")]
     const EM_ELF_MACHINE: u16 = aarch64::EM_AARCH64;
 
+    #[cfg(target_os = "linux")]
     fn new(pid: Pid) -> Result<Box<Self>, CoreError> {
         tracing::debug!("Getting GP registers for #{pid}");
         let gpr_state = ptrace::get_gp_reg_set(pid)?;

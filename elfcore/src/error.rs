@@ -14,6 +14,9 @@ pub enum CoreError {
     /// A process cannot dump itself
     #[error("cannot create a core dump file for the process itself")]
     CantDumpItself,
+    /// An error related to the provided [`ProcessInfoSource`]
+    #[error("cannot create a core dump file for custom process info source")]
+    CustomSourceInfo,
     /// A /proc file parsing error
     #[error("/proc parsing error")]
     ProcParsingError,
@@ -25,6 +28,7 @@ pub enum CoreError {
     InternalError(&'static str),
     /// OS error
     #[error("OS error")]
+    #[cfg(target_os = "linux")]
     NixError(#[from] nix::Error),
     /// I/O error
     #[error("I/O error")]
