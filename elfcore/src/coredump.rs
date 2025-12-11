@@ -307,7 +307,7 @@ fn round_up(value: usize, alignment: usize) -> usize {
         return 0;
     }
 
-    if value % alignment != 0 {
+    if !value.is_multiple_of(alignment) {
         (value + alignment) / alignment * alignment
     } else {
         value
