@@ -14,14 +14,16 @@ jobs:
     strategy:
       matrix:
         features: ["", "--no-default-features"]
-        target: ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
-    runs-on: ubuntu-latest
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
     steps:
     - uses: actions/checkout@v3
     - name: Install deps
       run: ./ci/install_deps.sh
-    - name: Add rust target
-      run: rustup target add ${{ matrix.target }} || true
     - name: Format
       run: cargo fmt --all -- --check
     - name: Check
@@ -29,13 +31,10 @@ jobs:
     - name: Clippy
       run: cargo clippy --target ${{ matrix.target }} --all-features --all-targets -- -D warnings
     - name: Build
-      if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
       run: cargo build --verbose ${{ matrix.features }}
     - name: Run tests
-      if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
       run: cargo test --verbose ${{ matrix.features }}
     - name: Run basic dump creation test
-      if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
       run: ./ci/test.sh
 
   miri:
