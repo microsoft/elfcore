@@ -125,6 +125,9 @@ pub trait ReadProcessMemory {
 ///     cmd_line: "example".to_string(),
 ///
 ///     arch_state: Box::new(ArchState {
+///         #[cfg(target_arch = "aarch64")]
+///         gpr_state: vec![0; 34],
+///         #[cfg(not(target_arch = "aarch64"))]
 ///         gpr_state: vec![0; 27],
 ///         components: vec![],
 ///     }),
