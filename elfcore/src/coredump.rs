@@ -17,7 +17,8 @@ use smallvec::SmallVec;
 use std::io::Read;
 use std::io::Write;
 use std::slice;
-use zerocopy::AsBytes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
 
 #[cfg(target_os = "linux")]
 use crate::{LinuxProcessMemoryReader, ProcessView};
@@ -78,14 +79,14 @@ where
     }
 }
 
-#[derive(AsBytes)]
+#[derive(IntoBytes, Immutable)]
 #[repr(C, packed)]
 struct MappedFilesNoteIntro {
     file_count: u64,
     page_size: u64,
 }
 
-#[derive(AsBytes)]
+#[derive(IntoBytes, Immutable)]
 #[repr(C, packed)]
 struct MappedFilesNoteItem {
     start_addr: u64,

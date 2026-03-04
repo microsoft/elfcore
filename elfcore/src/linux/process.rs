@@ -26,8 +26,8 @@ use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::{BufRead, IoSliceMut, Read};
-use zerocopy::AsBytes;
-use zerocopy::FromZeroes;
+use zerocopy::FromZeros;
+use zerocopy::IntoBytes;
 
 impl ThreadView {
     pub(crate) fn new(pid: Pid, tid: Pid) -> Result<Self, CoreError> {
@@ -210,7 +210,7 @@ fn get_aux_vector(pid: Pid) -> Result<Vec<Elf64_Auxv>, CoreError> {
             a_val: 0,
         };
 
-        match file.read_exact(aux.as_bytes_mut()) {
+        match file.read_exact(aux.as_mut_bytes()) {
             Ok(_) => auxv.push(aux),
             Err(_) => break,
         }
@@ -314,7 +314,7 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
                     let mut elf_hdr = Elf64_Ehdr::new_zeroed();
                     match process_vm_readv(
                         pid,
-                        &mut [IoSliceMut::new(elf_hdr.as_bytes_mut())],
+                        &mut [IoSliceMut::new(elf_hdr.as_mut_bytes())],
                         &[RemoteIoVec {
                             base: begin as usize,
                             len: std::mem::size_of::<Elf64_Ehdr>(),

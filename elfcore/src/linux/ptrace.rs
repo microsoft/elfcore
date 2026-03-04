@@ -13,10 +13,13 @@ use nix::sys;
 use nix::sys::ptrace::Request;
 use nix::sys::ptrace::RequestType;
 use nix::unistd::Pid;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::IntoBytes;
 
-pub fn ptrace_get_reg_set<T: AsBytes + FromBytes>(pid: Pid, set: u32) -> Result<Vec<T>, CoreError> {
+pub fn ptrace_get_reg_set<T: IntoBytes + FromBytes>(
+    pid: Pid,
+    set: u32,
+) -> Result<Vec<T>, CoreError> {
     let mut data = Vec::with_capacity(0x1000 / std::mem::size_of::<T>());
     let vec = nix::libc::iovec {
         iov_base: data.as_mut_ptr() as *mut c_void,

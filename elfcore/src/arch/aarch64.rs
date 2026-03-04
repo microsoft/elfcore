@@ -5,14 +5,16 @@
 
 #![cfg(target_arch = "aarch64")]
 
-use super::ArchComponentState;
-use crate::CoreError;
-use zerocopy::AsBytes;
-
 #[cfg(target_os = "linux")]
-use crate::ptrace::ptrace_get_reg_set;
+use super::ArchComponentState;
+#[cfg(target_os = "linux")]
+use crate::linux::ptrace::ptrace_get_reg_set;
+#[cfg(target_os = "linux")]
+use crate::CoreError;
 #[cfg(target_os = "linux")]
 use nix::unistd::Pid;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
 
 // aarch64 machine
 pub const EM_AARCH64: u16 = 183;
@@ -24,7 +26,7 @@ pub const NT_ARM_HW_WATCH: u32 = 0x403;
 pub const NT_ARM_SYSTEM_CALL: u32 = 0x404;
 
 #[repr(C, packed)]
-#[derive(Clone, Copy, Debug, AsBytes)]
+#[derive(Clone, Copy, Debug, IntoBytes, Immutable)]
 pub struct elf_gregset_t {
     pub regs: [u64; 31],
     pub sp: u64,
