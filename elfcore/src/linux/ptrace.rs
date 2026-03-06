@@ -6,8 +6,8 @@
 use std::ffi::c_void;
 use std::ptr;
 
-use super::elf::NT_PRFPREG;
-use super::elf::NT_PRSTATUS;
+use crate::elf::NT_PRFPREG;
+use crate::elf::NT_PRSTATUS;
 use crate::CoreError;
 use nix::sys;
 use nix::sys::ptrace::Request;
