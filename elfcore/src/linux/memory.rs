@@ -80,7 +80,7 @@ fn process_vm_readv_works() -> bool {
         &mut [IoSliceMut::new(&mut probe_out)],
         &[RemoteIoVec {
             base: probe_in.as_ptr() as usize,
-            len: std::mem::size_of_val(&probe_in),
+            len: size_of_val(&probe_in),
         }],
     );
 

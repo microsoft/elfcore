@@ -6,9 +6,9 @@
 //! constrained environment.
 
 use super::arch;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
 
 pub const EI_MAG0: usize = 0;
 pub const EI_MAG1: usize = 1;
@@ -66,7 +66,7 @@ pub const NT_SIGINFO: u32 = 0x53494749;
 pub const NT_FILE: u32 = 0x46494c45;
 
 /// Program status
-#[derive(AsBytes)]
+#[derive(IntoBytes, Immutable)]
 #[repr(C)]
 pub struct prpsinfo_t {
     // total size (bytes):  136
@@ -87,7 +87,7 @@ pub struct prpsinfo_t {
 }
 
 /// Signal information
-#[derive(AsBytes)]
+#[derive(IntoBytes, Immutable)]
 #[repr(C)]
 pub struct siginfo_t {
     // total size (bytes):  128
@@ -99,7 +99,7 @@ pub struct siginfo_t {
 }
 
 /// Kernel time value
-#[derive(AsBytes)]
+#[derive(IntoBytes, Immutable)]
 #[repr(C)]
 pub struct pr_timeval_t {
     pub tv_sec: u64,
@@ -107,7 +107,7 @@ pub struct pr_timeval_t {
 }
 
 /// Program status
-#[derive(AsBytes)]
+#[derive(IntoBytes, Immutable)]
 #[repr(C)]
 pub struct prstatus_t {
     // total size (bytes):  336 (x86_64)
@@ -132,7 +132,7 @@ pub struct prstatus_t {
 }
 
 /// ELF auxiliary vector note
-#[derive(AsBytes, FromBytes, FromZeroes, Clone, Copy, Debug)]
+#[derive(IntoBytes, FromBytes, Immutable, Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Elf64_Auxv {
     /// AUXV type
@@ -142,7 +142,7 @@ pub struct Elf64_Auxv {
 }
 
 /// ELF note header
-#[derive(AsBytes)]
+#[derive(IntoBytes, Immutable)]
 #[repr(C)]
 pub struct Elf64_Nhdr {
     pub namesz: u32,
@@ -151,7 +151,7 @@ pub struct Elf64_Nhdr {
 }
 
 /// ELF header
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(IntoBytes, FromBytes, Immutable)]
 #[repr(C)]
 pub struct Elf64_Ehdr {
     pub e_ident: [u8; 16],
@@ -171,7 +171,7 @@ pub struct Elf64_Ehdr {
 }
 
 /// ELF program header
-#[derive(AsBytes, FromBytes, FromZeroes)]
+#[derive(IntoBytes, FromBytes, Immutable)]
 #[repr(C)]
 pub struct Elf64_Phdr {
     pub p_type: u32,

@@ -26,8 +26,8 @@ use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::{BufRead, IoSliceMut, Read};
-use zerocopy::AsBytes;
-use zerocopy::FromZeroes;
+use zerocopy::FromZeros;
+use zerocopy::IntoBytes;
 
 impl ThreadView {
     pub(crate) fn new(pid: Pid, tid: Pid) -> Result<Self, CoreError> {
@@ -184,7 +184,7 @@ fn get_thread_ids(pid: Pid) -> Result<Vec<Pid>, CoreError> {
             if let Some(stem) = stem {
                 if stem != "." && stem != ".." {
                     let stem = stem.to_string_lossy();
-                    let tid = Pid::from_raw(stem.parse::<u32>()? as nix::libc::pid_t);
+                    let tid = Pid::from_raw(stem.parse::<u32>()? as libc::pid_t);
 
                     tracing::debug!("Found thread {}", tid);
 
@@ -210,7 +210,7 @@ fn get_aux_vector(pid: Pid) -> Result<Vec<Elf64_Auxv>, CoreError> {
             a_val: 0,
         };
 
-        match file.read_exact(aux.as_bytes_mut()) {
+        match file.read_exact(aux.as_mut_bytes()) {
             Ok(_) => auxv.push(aux),
             Err(_) => break,
         }
@@ -314,10 +314,10 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
                     let mut elf_hdr = Elf64_Ehdr::new_zeroed();
                     match process_vm_readv(
                         pid,
-                        &mut [IoSliceMut::new(elf_hdr.as_bytes_mut())],
+                        &mut [IoSliceMut::new(elf_hdr.as_mut_bytes())],
                         &[RemoteIoVec {
                             base: begin as usize,
-                            len: std::mem::size_of::<Elf64_Ehdr>(),
+                            len: size_of::<Elf64_Ehdr>(),
                         }],
                     ) {
                         Ok(_) => Some(elf_hdr),
@@ -331,9 +331,9 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
                         && elf_hdr.e_ident[EI_MAG2] == ELFMAG2
                         && elf_hdr.e_ident[EI_MAG3] == ELFMAG3
                         && elf_hdr.e_ident[EI_VERSION] == EV_CURRENT
-                        && elf_hdr.e_ehsize == std::mem::size_of::<Elf64_Ehdr>() as u16
+                        && elf_hdr.e_ehsize == size_of::<Elf64_Ehdr>() as u16
                         && (elf_hdr.e_type == ET_EXEC || elf_hdr.e_type == ET_DYN)
-                        && elf_hdr.e_phentsize == std::mem::size_of::<Elf64_Phdr>() as u16
+                        && elf_hdr.e_phentsize == size_of::<Elf64_Phdr>() as u16
                         && elf_hdr.e_machine == arch::ArchState::EM_ELF_MACHINE
                     {
                         mapped_elfs.insert(mapped_file_name.clone());

@@ -17,7 +17,8 @@ use smallvec::SmallVec;
 use std::io::Read;
 use std::io::Write;
 use std::slice;
-use zerocopy::AsBytes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
 
 #[cfg(target_os = "linux")]
 use crate::{LinuxProcessMemoryReader, ProcessView};
@@ -38,7 +39,7 @@ struct ElfCoreWriter<T: Write> {
     written: usize,
 }
 
-impl<T> std::io::Write for ElfCoreWriter<T>
+impl<T> Write for ElfCoreWriter<T>
 where
     T: Write,
 {
@@ -78,14 +79,14 @@ where
     }
 }
 
-#[derive(AsBytes)]
+#[derive(IntoBytes, Immutable)]
 #[repr(C, packed)]
 struct MappedFilesNoteIntro {
     file_count: u64,
     page_size: u64,
 }
 
-#[derive(AsBytes)]
+#[derive(IntoBytes, Immutable)]
 #[repr(C, packed)]
 struct MappedFilesNoteItem {
     start_addr: u64,
@@ -167,14 +168,13 @@ fn get_elf_notes_sizes<P: ProcessInfoSource>(
     custom_notes: Option<&[CustomFileNote<'_>]>,
 ) -> Result<NoteSizes, CoreError> {
     let header_and_name =
-        std::mem::size_of::<Elf64_Nhdr>() + round_up(NOTE_NAME_CORE.len() + 1, ELF_NOTE_ALIGN);
-    let process_info =
-        header_and_name + round_up(std::mem::size_of::<prpsinfo_t>(), ELF_NOTE_ALIGN);
+        size_of::<Elf64_Nhdr>() + round_up(NOTE_NAME_CORE.len() + 1, ELF_NOTE_ALIGN);
+    let process_info = header_and_name + round_up(size_of::<prpsinfo_t>(), ELF_NOTE_ALIGN);
     let one_thread_status = header_and_name
-        + round_up(std::mem::size_of::<siginfo_t>(), ELF_NOTE_ALIGN)
+        + round_up(size_of::<siginfo_t>(), ELF_NOTE_ALIGN)
         + header_and_name
         + round_up(
-            std::mem::size_of::<prstatus_t>() + {
+            size_of::<prstatus_t>() + {
                 let mut arch_size = 0;
                 for component in pv
                     .threads()
@@ -193,7 +193,7 @@ fn get_elf_notes_sizes<P: ProcessInfoSource>(
     // Calculate auxv size - do not count if no auxv
     let aux_vector = pv
         .aux_vector()
-        .map(|auxv| header_and_name + std::mem::size_of_val(auxv))
+        .map(|auxv| header_and_name + size_of_val(auxv))
         .unwrap_or(0);
 
     // Calculate mapped files size - do not count if no mapped files
@@ -205,11 +205,10 @@ fn get_elf_notes_sizes<P: ProcessInfoSource>(
 
             for mapped_file in files {
                 string_size += (mapped_file.name.len() + 1) * mapped_file.regions.len();
-                addr_layout_size +=
-                    std::mem::size_of::<MappedFilesNoteItem>() * mapped_file.regions.len();
+                addr_layout_size += size_of::<MappedFilesNoteItem>() * mapped_file.regions.len();
             }
 
-            let intro_size = std::mem::size_of::<MappedFilesNoteIntro>();
+            let intro_size = size_of::<MappedFilesNoteIntro>();
 
             header_and_name + round_up(intro_size + addr_layout_size + string_size, ELF_NOTE_ALIGN)
         })
@@ -333,9 +332,9 @@ fn write_elf_header<T: Write, P: ProcessInfoSource>(
         e_type: ET_CORE,
         e_machine: arch::ArchState::EM_ELF_MACHINE,
         e_version: EV_CURRENT as u32,
-        e_phoff: std::mem::size_of::<Elf64_Ehdr>() as u64,
-        e_ehsize: std::mem::size_of::<Elf64_Ehdr>() as u16,
-        e_phentsize: std::mem::size_of::<Elf64_Phdr>() as u16,
+        e_phoff: size_of::<Elf64_Ehdr>() as u64,
+        e_ehsize: size_of::<Elf64_Ehdr>() as u16,
+        e_phentsize: size_of::<Elf64_Phdr>() as u16,
         e_phnum: 1 + pv.va_regions().len() as u16, // PT_NOTE and VA regions
         e_shentsize: 0,
         e_entry: 0,
@@ -353,10 +352,7 @@ fn write_elf_header<T: Write, P: ProcessInfoSource>(
     // SAFETY: Elf64_Ehdr is repr(C) with no padding bytes,
     // so all byte patterns are valid.
     let slice = unsafe {
-        slice::from_raw_parts(
-            &elf_header as *const _ as *mut u8,
-            std::mem::size_of::<Elf64_Ehdr>(),
-        )
+        slice::from_raw_parts(&elf_header as *const _ as *mut u8, size_of::<Elf64_Ehdr>())
     };
     writer.write_all(slice)?;
 
@@ -381,8 +377,8 @@ fn write_program_headers<T: Write, P: ProcessInfoSource>(
     // as many PT_LOAD as there are VA regions.
     // Notes are situated right after the headers.
 
-    let phdr_size = std::mem::size_of::<Elf64_Phdr>() * (pv.va_regions().len() + 1);
-    let ehdr_size = std::mem::size_of::<Elf64_Ehdr>();
+    let phdr_size = size_of::<Elf64_Phdr>() * (pv.va_regions().len() + 1);
+    let ehdr_size = size_of::<Elf64_Ehdr>();
     let data_offset = round_up(ehdr_size, ELF_HEADER_ALIGN) + round_up(phdr_size, ELF_HEADER_ALIGN);
 
     {
@@ -402,7 +398,7 @@ fn write_program_headers<T: Write, P: ProcessInfoSource>(
         let slice = unsafe {
             slice::from_raw_parts_mut(
                 &mut note_header as *mut _ as *mut u8,
-                std::mem::size_of::<Elf64_Phdr>(),
+                size_of::<Elf64_Phdr>(),
             )
         };
         writer.write_all(slice)?;
@@ -445,7 +441,7 @@ fn write_program_headers<T: Write, P: ProcessInfoSource>(
         let slice = unsafe {
             slice::from_raw_parts_mut(
                 &mut seg_header as *mut _ as *mut u8,
-                std::mem::size_of::<Elf64_Phdr>(),
+                size_of::<Elf64_Phdr>(),
             )
         };
         writer.write_all(slice)?;
@@ -483,7 +479,7 @@ fn write_elf_note_header<T: Write>(
         writer.stream_position()?
     );
     writer.write_all(note_header.as_bytes())?;
-    written += std::mem::size_of::<Elf64_Nhdr>();
+    written += size_of::<Elf64_Nhdr>();
 
     tracing::debug!(
         "Writing note name at offset {}...",
@@ -533,8 +529,7 @@ fn write_elf_note_file<T: Write>(
 ) -> Result<usize, CoreError> {
     let mut written = 0_usize;
 
-    let header_and_name =
-        std::mem::size_of::<Elf64_Nhdr>() + round_up(name_bytes.len() + 1, ELF_NOTE_ALIGN);
+    let header_and_name = size_of::<Elf64_Nhdr>() + round_up(name_bytes.len() + 1, ELF_NOTE_ALIGN);
     let data_len = note_len - header_and_name;
     written += write_elf_note_header(writer, note_kind, name_bytes, data_len)?;
 
@@ -544,7 +539,7 @@ fn write_elf_note_file<T: Write>(
         writer.stream_position()?
     );
 
-    let max_len = data_len - std::mem::size_of::<u32>();
+    let max_len = data_len - size_of::<u32>();
     let total = std::io::copy(&mut file.take(max_len as u64), writer)? as usize;
     if file.read(&mut [0]).unwrap_or(0) != 0 {
         tracing::warn!(truncated_len = total, "note will be truncated");
@@ -556,7 +551,7 @@ fn write_elf_note_file<T: Write>(
     }
 
     writer.write_all((total as u32).as_bytes())?;
-    written += std::mem::size_of::<u32>();
+    written += size_of::<u32>();
     written += writer.align_position(ELF_NOTE_ALIGN)?;
 
     Ok(written)
