@@ -970,7 +970,7 @@ pub struct CoreDumpBuilder<'a, P: ProcessInfoSource, M: ReadProcessMemory> {
     memory_reader: M,
 }
 
-impl<'a, P: ProcessInfoSource, M: ReadProcessMemory> CoreDumpBuilder<'a, P, M> {
+impl<'a> CoreDumpBuilder<'a, ProcessView, LinuxProcessMemoryReader> {
     /// Create a new core dump builder for the process with the provided PID
     #[cfg(target_os = "linux")]
     pub fn new(
@@ -985,7 +985,9 @@ impl<'a, P: ProcessInfoSource, M: ReadProcessMemory> CoreDumpBuilder<'a, P, M> {
             memory_reader,
         })
     }
+}
 
+impl<'a, P: ProcessInfoSource, M: ReadProcessMemory> CoreDumpBuilder<'a, P, M> {
     /// Create a new core dump builder from a custom `ProcessInfoSource`
     pub fn from_source(source: P, memory_reader: M) -> CoreDumpBuilder<'a, P, M> {
         CoreDumpBuilder {
