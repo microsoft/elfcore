@@ -184,7 +184,7 @@ fn get_thread_ids(pid: Pid) -> Result<Vec<Pid>, CoreError> {
             if let Some(stem) = stem {
                 if stem != "." && stem != ".." {
                     let stem = stem.to_string_lossy();
-                    let tid = Pid::from_raw(stem.parse::<u32>()? as nix::libc::pid_t);
+                    let tid = Pid::from_raw(stem.parse::<u32>()? as libc::pid_t);
 
                     tracing::debug!("Found thread {}", tid);
 
@@ -317,7 +317,7 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
                         &mut [IoSliceMut::new(elf_hdr.as_mut_bytes())],
                         &[RemoteIoVec {
                             base: begin as usize,
-                            len: std::mem::size_of::<Elf64_Ehdr>(),
+                            len: size_of::<Elf64_Ehdr>(),
                         }],
                     ) {
                         Ok(_) => Some(elf_hdr),
@@ -331,9 +331,9 @@ fn get_va_regions(pid: Pid) -> Result<(Vec<VaRegion>, Vec<MappedFile>, u64), Cor
                         && elf_hdr.e_ident[EI_MAG2] == ELFMAG2
                         && elf_hdr.e_ident[EI_MAG3] == ELFMAG3
                         && elf_hdr.e_ident[EI_VERSION] == EV_CURRENT
-                        && elf_hdr.e_ehsize == std::mem::size_of::<Elf64_Ehdr>() as u16
+                        && elf_hdr.e_ehsize == size_of::<Elf64_Ehdr>() as u16
                         && (elf_hdr.e_type == ET_EXEC || elf_hdr.e_type == ET_DYN)
-                        && elf_hdr.e_phentsize == std::mem::size_of::<Elf64_Phdr>() as u16
+                        && elf_hdr.e_phentsize == size_of::<Elf64_Phdr>() as u16
                         && elf_hdr.e_machine == arch::ArchState::EM_ELF_MACHINE
                     {
                         mapped_elfs.insert(mapped_file_name.clone());

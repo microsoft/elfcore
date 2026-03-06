@@ -3,8 +3,6 @@
 
 //! Aarch64 specifics for ELF core dump files.
 
-#![cfg(target_arch = "aarch64")]
-
 #[cfg(target_os = "linux")]
 use super::ArchComponentState;
 #[cfg(target_os = "linux")]

@@ -273,5 +273,5 @@ pub struct ThreadView {
     pub sigpend: u64,
 
     /// State of the CPU
-    pub arch_state: Box<arch::ArchState>,
+    pub arch_state: Box<ArchState>,
 }

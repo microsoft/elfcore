@@ -14,3 +14,27 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = "0.3.17"
 zerocopy = { version = "0.8", features = ["derive"] }
+
+[workspace.lints.rust]
+# Lint groups need a priority lower than individual lints so they get applied first.
+future_incompatible = { level = "deny", priority = -2 }
+rust_2018_idioms = { level = "warn", priority = -2 }
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+debug_assert_with_mut_call = "warn"
+filter_map_next = "warn"
+fn_params_excessive_bools = "warn"
+implicit_clone = "warn"
+imprecise_flops = "warn"
+inefficient_to_string = "warn"
+linkedlist = "warn"
+lossy_float_literal = "warn"
+macro_use_imports = "warn"
+option_option = "warn"
+ptr_cast_constness = "warn"
+ref_option_ref = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+suboptimal_flops = "warn"
+undocumented_unsafe_blocks = "warn"
+unnecessary_box_returns = "warn"
