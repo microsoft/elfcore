@@ -3,14 +3,12 @@
 
 //! Aarch64 specifics for ELF core dump files.
 
-#![cfg(target_arch = "aarch64")]
-
 use super::ArchComponentState;
 use crate::CoreError;
 use zerocopy::AsBytes;
 
 #[cfg(target_os = "linux")]
-use crate::ptrace::ptrace_get_reg_set;
+use crate::linux::ptrace::ptrace_get_reg_set;
 #[cfg(target_os = "linux")]
 use nix::unistd::Pid;
 

@@ -13,8 +13,16 @@ jobs:
   build:
     strategy:
       matrix:
-        features: ["", "--no-default-features"]
-    runs-on: ubuntu-latest
+        include:
+          - runner: ubuntu-latest
+            features: ""
+          - runner: ubuntu-latest
+            features: "--no-default-features"
+          - runner: ubuntu-24.04-arm
+            features: ""
+          - runner: ubuntu-24.04-arm
+            features: "--no-default-features"
+    runs-on: ${{ matrix.runner }}
     steps:
     - uses: actions/checkout@v3
     - name: Install deps

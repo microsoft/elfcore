@@ -307,7 +307,7 @@ fn round_up(value: usize, alignment: usize) -> usize {
         return 0;
     }
 
-    if value % alignment != 0 {
+    if !value.is_multiple_of(alignment) {
         (value + alignment) / alignment * alignment
     } else {
         value
@@ -1127,6 +1127,9 @@ mod tests {
                 cmd_line: "".to_string(),
 
                 arch_state: Box::new(ArchState {
+                    #[cfg(target_arch = "aarch64")]
+                    gpr_state: vec![0; 34],
+                    #[cfg(target_arch = "x86_64")]
                     gpr_state: vec![0; 27],
                     components: vec![],
                 }),
@@ -1183,6 +1186,9 @@ mod tests {
                 cmd_line: "".to_string(),
 
                 arch_state: Box::new(ArchState {
+                    #[cfg(target_arch = "aarch64")]
+                    gpr_state: vec![0; 34],
+                    #[cfg(target_arch = "x86_64")]
                     gpr_state: vec![0; 27],
                     components: vec![],
                 }),
