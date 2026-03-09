@@ -970,9 +970,9 @@ pub struct CoreDumpBuilder<'a, P: ProcessInfoSource, M: ReadProcessMemory> {
     memory_reader: M,
 }
 
+#[cfg(target_os = "linux")]
 impl<'a> CoreDumpBuilder<'a, ProcessView, LinuxProcessMemoryReader> {
     /// Create a new core dump builder for the process with the provided PID
-    #[cfg(target_os = "linux")]
     pub fn new(
         pid: libc::pid_t,
     ) -> Result<CoreDumpBuilder<'a, ProcessView, LinuxProcessMemoryReader>, CoreError> {
