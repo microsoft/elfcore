@@ -103,10 +103,10 @@ pub trait ReadProcessMemory {
 /// // Example of ThreadView and VaRegion structures that can be used
 /// // in the custom source
 /// let custom_source = CustomSource {
-///   pid: nix::unistd::getpid().as_raw(),
+///   pid: 1234,
 ///   threads: vec![ThreadView {
 ///     flags: 0, // Kernel flags for the process
-///     tid: nix::unistd::getpid().as_raw(),
+///     tid: 1234,
 ///     uid: 0,               // User ID
 ///     gid: 0,               // Group ID
 ///     comm: "example".to_string(), // Command name
