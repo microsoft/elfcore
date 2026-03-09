@@ -22,10 +22,15 @@ jobs:
             features: ""
           - runner: ubuntu-24.04-arm
             features: "--no-default-features"
+          - runner: windows-latest
+            features: ""
+          - runner: windows-latest
+            features: "--no-default-features"
     runs-on: ${{ matrix.runner }}
     steps:
     - uses: actions/checkout@v3
     - name: Install deps
+      if: runner.os == 'Linux'
       run: ./ci/install_deps.sh
     - name: Format
       run: cargo fmt --all -- --check
@@ -38,6 +43,7 @@ jobs:
     - name: Run tests
       run: cargo test --verbose ${{ matrix.features }}
     - name: Run basic dump creation test
+      if: runner.os == 'Linux'
       run: ./ci/test.sh
 
   miri:
