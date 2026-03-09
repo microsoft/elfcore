@@ -1,6 +1,6 @@
 [package]
 name = "elfcore"
-version = "2.0.1"
+version = "2.0.2"
 edition = "2021"
 description = "elfcore is a crate to create ELF core dumps for processes on Linux."
 license = "MIT"
