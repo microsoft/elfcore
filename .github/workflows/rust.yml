@@ -28,7 +28,7 @@ jobs:
             features: "--no-default-features"
     runs-on: ${{ matrix.runner }}
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3.7.0
     - name: Install deps
       if: runner.os == 'Linux'
       run: ./ci/install_deps.sh
@@ -53,7 +53,7 @@ jobs:
         features: ["", "--no-default-features"]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3.7.0
       - name: Install Miri
         run: |
           rustup toolchain install nightly --component miri
